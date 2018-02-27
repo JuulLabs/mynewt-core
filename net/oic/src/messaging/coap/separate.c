@@ -42,7 +42,7 @@
 
 #if defined(OC_SERVER) && MYNEWT_VAL(OC_SEPARATE_RESPONSES)
 
-#include "api/oc_buffer.h"
+#include "oic/oc_buffer.h"
 #include "oic/messaging/coap/separate.h"
 #include "oic/messaging/coap/transactions.h"
 
@@ -112,7 +112,7 @@ coap_separate_accept(struct coap_packet_rx *coap_req,
             return 0;
         }
     }
-    memcpy(&separate_store->endpoint, endpoint, sizeof(oc_endpoint_t));
+    memcpy(&separate_store->endpoint, endpoint, oc_endpoint_size(endpoint));
 
     /* store correct response type */
     separate_store->type = COAP_TYPE_NON;

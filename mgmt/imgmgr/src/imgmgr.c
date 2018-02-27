@@ -152,17 +152,19 @@ imgr_read_info(int image_slot, struct image_version *ver, uint8_t *hash,
         goto end;
     }
 
-    if (ver != NULL) {
+    if (ver) {
         memset(ver, 0xff, sizeof(*ver));
-        if (hdr->ih_magic == IMAGE_MAGIC) {
+    }
+    if (hdr->ih_magic == IMAGE_MAGIC) {
+        if (ver) {
             memcpy(ver, &hdr->ih_ver, sizeof(*ver));
-        } else if (hdr->ih_magic == 0xffffffff) {
-            rc = 2;
-            goto end;
-        } else {
-            rc = 1;
-            goto end;
         }
+    } else if (hdr->ih_magic == 0xffffffff) {
+        rc = 2;
+        goto end;
+    } else {
+        rc = 1;
+        goto end;
     }
 
     if (flags) {
@@ -264,15 +266,13 @@ imgr_find_by_hash(uint8_t *find, struct image_version *ver)
     return -1;
 }
 
-static int
-imgr_erase(struct mgmt_cbuf *cb)
+int
+imgmgr_find_best_area_id(void)
 {
     struct image_version ver;
-    int area_id;
     int best = -1;
-    int rc;
     int i;
-    CborError g_err = CborNoError;
+    int rc;
 
     for (i = 0; i < 2; i++) {
         rc = imgr_read_info(i, &ver, NULL, NULL);
@@ -282,7 +282,7 @@ imgr_erase(struct mgmt_cbuf *cb)
         if (rc == 0) {
             /* Image in slot is ok. */
             if (imgmgr_state_slot_in_use(i)) {
-                /* Slot is in use; can't erase to this. */
+                /* Slot is in use; can't use this. */
                 continue;
             } else {
                 /*
@@ -297,7 +297,20 @@ imgr_erase(struct mgmt_cbuf *cb)
         break;
     }
     if (best >= 0) {
-        area_id = flash_area_id_from_image_slot(best);
+        best = flash_area_id_from_image_slot(best);
+    }
+    return best;
+}
+
+static int
+imgr_erase(struct mgmt_cbuf *cb)
+{
+    int area_id;
+    int rc;
+    CborError g_err = CborNoError;
+
+    area_id = imgmgr_find_best_area_id();
+    if (area_id >= 0) {
         if (imgr_state.upload.fa) {
             flash_area_close(imgr_state.upload.fa);
             imgr_state.upload.fa = NULL;
@@ -315,10 +328,6 @@ imgr_erase(struct mgmt_cbuf *cb)
          * No slot where to erase!
          */
         return MGMT_ERR_ENOMEM;
-    }
-
-    if (!imgr_state.upload.fa) {
-        return MGMT_ERR_EINVAL;
     }
 
     g_err |= cbor_encode_text_stringz(&cb->encoder, "rc");
@@ -359,12 +368,9 @@ imgr_upload(struct mgmt_cbuf *cb)
         },
         [3] = { 0 },
     };
-    struct image_version ver;
     struct image_header *hdr;
     int area_id;
-    int best;
     int rc;
-    int i;
     bool empty = false;
     CborError g_err = CborNoError;
 
@@ -390,32 +396,9 @@ imgr_upload(struct mgmt_cbuf *cb)
          */
         imgr_state.upload.off = 0;
         imgr_state.upload.size = size;
-        best = -1;
 
-        for (i = 0; i < 2; i++) {
-            rc = imgr_read_info(i, &ver, NULL, NULL);
-            if (rc < 0) {
-                continue;
-            }
-            if (rc == 0) {
-                /* Image in slot is ok. */
-                if (imgmgr_state_slot_in_use(i)) {
-                    /* Slot is in use; can't upload to this. */
-                    continue;
-                } else {
-                    /*
-                     * Not active slot, but image is ok. Use it if there are
-                     * no better candidates.
-                     */
-                    best = i;
-                }
-                continue;
-            }
-            best = i;
-            break;
-        }
-        if (best >= 0) {
-            area_id = flash_area_id_from_image_slot(best);
+        area_id = imgmgr_find_best_area_id();
+        if (area_id >= 0) {
             if (imgr_state.upload.fa) {
                 flash_area_close(imgr_state.upload.fa);
                 imgr_state.upload.fa = NULL;

@@ -402,6 +402,8 @@ ble_ll_sched_master_new(struct ble_ll_conn_sm *connsm,
             assert(0);
         }
     }
+    earliest_start += MYNEWT_VAL(BLE_LL_CONN_INIT_MIN_WIN_OFFSET) *
+                      BLE_LL_SCHED_32KHZ_TICKS_PER_SLOT;
     itvl_t = connsm->conn_itvl_ticks;
 
     /* We have to find a place for this schedule */
@@ -630,6 +632,8 @@ ble_ll_sched_master_new(struct ble_ll_conn_sm *connsm,
             assert(0);
         }
     }
+    earliest_start += MYNEWT_VAL(BLE_LL_CONN_INIT_MIN_WIN_OFFSET) *
+                      BLE_LL_SCHED_32KHZ_TICKS_PER_SLOT;
     earliest_end = earliest_start + dur;
     itvl_t = connsm->conn_itvl_ticks;
 
@@ -825,7 +829,8 @@ ble_ll_sched_slave_new(struct ble_ll_conn_sm *connsm)
 }
 
 int
-ble_ll_sched_adv_new(struct ble_ll_sched_item *sch, ble_ll_sched_adv_new_cb cb)
+ble_ll_sched_adv_new(struct ble_ll_sched_item *sch, ble_ll_sched_adv_new_cb cb,
+                     void *arg)
 {
     int rc;
     os_sr_t sr;
@@ -877,7 +882,7 @@ ble_ll_sched_adv_new(struct ble_ll_sched_item *sch, ble_ll_sched_adv_new_cb cb)
     }
 
     if (cb) {
-        cb((struct ble_ll_adv_sm *)orig->cb_arg, adv_start);
+        cb((struct ble_ll_adv_sm *)orig->cb_arg, adv_start, arg);
     }
 
 #ifdef BLE_XCVR_RFCLK
@@ -1240,13 +1245,11 @@ ble_ll_sched_next_time(uint32_t *next_event_time)
 void
 ble_ll_sched_rfclk_chk_restart(void)
 {
-    int stop;
     os_sr_t sr;
     uint8_t ll_state;
     int32_t time_till_next;
     uint32_t next_time;
 
-    stop = 0;
     OS_ENTER_CRITICAL(sr);
     ll_state = ble_ll_state_get();
     if (ble_ll_sched_next_time(&next_time)) {
@@ -1256,19 +1259,24 @@ ble_ll_sched_rfclk_chk_restart(void)
          */
         time_till_next = (int32_t)(next_time - os_cputime_get32());
         if (time_till_next > g_ble_ll_data.ll_xtal_ticks) {
-            /* Stop the clock */
-            stop = 1;
+            /* Restart the rfclk timer based on the next scheduled time */
             ble_ll_xcvr_rfclk_timer_start(next_time);
+
+            /* Only disable the rfclk if doing nothing */
+            if (ll_state == BLE_LL_STATE_STANDBY) {
+                ble_ll_log(BLE_LL_LOG_ID_RFCLK_SCHED_DIS, g_ble_ll_data.ll_rfclk_state,
+                           0, 0);
+                ble_ll_xcvr_rfclk_disable();
+            }
         }
     } else {
-        stop = 1;
-    }
-
-    /* Only disable the rfclk if doing nothing */
-    if (stop && (ll_state == BLE_LL_STATE_STANDBY)) {
-        ble_ll_log(BLE_LL_LOG_ID_RFCLK_SCHED_DIS, g_ble_ll_data.ll_rfclk_state,
-                   0, 0);
-        ble_ll_xcvr_rfclk_disable();
+        /*
+         * Only stop the timer and rfclk if doing nothing currently. If
+         * in some other state, that state will handle the timer and rfclk
+         */
+        if (ll_state == BLE_LL_STATE_STANDBY) {
+            ble_ll_xcvr_rfclk_stop();
+        }
     }
     OS_EXIT_CRITICAL(sr);
 }
@@ -1429,6 +1437,66 @@ done:
 }
 #endif
 
+#if MYNEWT_VAL(BLE_LL_DIRECT_TEST_MODE) == 1
+int ble_ll_sched_dtm(struct ble_ll_sched_item *sch)
+{
+    int rc;
+    os_sr_t sr;
+    struct ble_ll_sched_item *entry;
+
+    OS_ENTER_CRITICAL(sr);
+
+    if (!ble_ll_sched_insert_if_empty(sch)) {
+        /* Nothing in schedule. Schedule as soon as possible
+         * If we are here it means sch has been added to the scheduler */
+        rc = 0;
+        goto done;
+    }
+
+    /* Try to find slot for test. */
+    os_cputime_timer_stop(&g_ble_ll_sched_timer);
+    TAILQ_FOREACH(entry, &g_ble_ll_sched_q, link) {
+        /* We can insert if before entry in list */
+        if (sch->end_time <= entry->start_time) {
+            rc = 0;
+            TAILQ_INSERT_BEFORE(entry, sch, link);
+            sch->enqueued = 1;
+            break;
+        }
+
+        /* Check for overlapping events. For now drop if it overlaps with
+         * anything. We can make it smarter later on
+         */
+        if (ble_ll_sched_is_overlap(sch, entry)) {
+            OS_EXIT_CRITICAL(sr);
+            return -1;
+        }
+    }
+
+    if (!entry) {
+        rc = 0;
+        TAILQ_INSERT_TAIL(&g_ble_ll_sched_q, sch, link);
+        sch->enqueued = 1;
+    }
+
+done:
+
+    /* Get head of list to restart timer */
+    sch = TAILQ_FIRST(&g_ble_ll_sched_q);
+
+#ifdef BLE_XCVR_RFCLK
+    ble_ll_xcvr_rfclk_timer_start(sch->start_time);
+#endif
+
+    OS_EXIT_CRITICAL(sr);
+
+    /* Restart timer */
+    assert(sch != NULL);
+    os_cputime_timer_start(&g_ble_ll_sched_timer, sch->start_time);
+
+    return rc;
+}
+#endif
 /**
  * Stop the scheduler
  *

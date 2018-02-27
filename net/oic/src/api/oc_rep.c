@@ -72,6 +72,8 @@ static oc_rep_t *
 _alloc_rep(void)
 {
     oc_rep_t *rep = os_memblock_get(&oc_rep_objects);
+
+    memset(rep, 0, sizeof(*rep));
 #ifdef DEBUG
     oc_assert(rep != NULL);
 #endif
@@ -326,6 +328,6 @@ void
 oc_rep_init(void)
 {
     os_mempool_init(&oc_rep_objects, EST_NUM_REP_OBJECTS,
-      sizeof(oc_rep_t), oc_rep_objects_area, "oc_rep_o");
+                    sizeof(oc_rep_t), oc_rep_objects_area, "oc_rep_o");
 }
 #endif

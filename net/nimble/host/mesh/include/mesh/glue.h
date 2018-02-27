@@ -21,13 +21,14 @@
 #define _MESH_GLUE_
 
 #include <assert.h>
+#include <errno.h>
 
 #include "syscfg/syscfg.h"
 
 #include "os/os_mbuf.h"
-#include "os/os_mbuf.h"
 #include "os/os_callout.h"
 #include "os/os_eventq.h"
+#include "os/queue.h"
 
 #include "atomic.h"
 #include "nimble/ble.h"
@@ -49,7 +50,6 @@
 #define u64_t   uint64_t
 #define s64_t   int64_t
 #define s32_t   int32_t
-typedef size_t ssize_t;
 
 /** @brief Helper to declare elements of bt_data arrays
  *
@@ -127,6 +127,15 @@ typedef size_t ssize_t;
         assert(code);             \
     } while (0);
 
+#define __ASSERT_NO_MSG(test) __ASSERT(test, "")
+
+/* Mesh is designed to not use mbuf chains */
+#if BT_DBG_ENABLED
+#define ASSERT_NOT_CHAIN(om) assert(SLIST_NEXT(om, om_next) == NULL)
+#else
+#define ASSERT_NOT_CHAIN(om) (void)(om)
+#endif
+
 #define __packed    __attribute__((__packed__))
 
 #define MSEC_PER_SEC   (1000)
@@ -134,6 +143,12 @@ typedef size_t ssize_t;
 #define K_SECONDS(s)   K_MSEC((s) * MSEC_PER_SEC)
 #define K_MINUTES(m)   K_SECONDS((m) * 60)
 #define K_HOURS(h)     K_MINUTES((h) * 60)
+
+#ifndef BIT
+#define BIT(n)  (1UL << (n))
+#endif
+
+#define BIT_MASK(n) (BIT(n) - 1)
 
 #define BT_GAP_ADV_FAST_INT_MIN_1               0x0030  /* 30 ms    */
 #define BT_GAP_ADV_FAST_INT_MAX_1               0x0060  /* 60 ms    */
@@ -317,5 +332,89 @@ static inline unsigned int find_msb_set(u32_t op)
 
     return 32 - __builtin_clz(op);
 }
+
+#define CONFIG_BLUETOOTH_MESH_FRIEND        BLE_MESH_FRIEND
+#define CONFIG_BT_MESH_FRIEND               BLE_MESH_FRIEND
+#define CONFIG_BT_MESH_GATT_PROXY           BLE_MESH_GATT_PROXY
+#define CONFIG_BT_MESH_LOW_POWER            BLE_MESH_LOW_POWER
+#define CONFIG_BT_MESH_LPN_AUTO             BLE_MESH_LPN_AUTO
+#define CONFIG_BT_MESH_LPN_ESTABLISHMENT    BLE_MESH_LPN_ESTABLISHMENT
+#define CONFIG_BT_MESH_PB_ADV               BLE_MESH_PB_ADV
+#define CONFIG_BT_MESH_PB_GATT              BLE_MESH_PB_GATT
+#define CONFIG_BT_MESH_PROV                 BLE_MESH_PROV
+#define CONFIG_BT_TESTING                   BLE_MESH_TESTING
+
+/* Above flags are used with IS_ENABLED macro */
+#define IS_ENABLED(config) MYNEWT_VAL(config)
+
+#define CONFIG_BLUETOOTH_MESH_LPN_GROUPS    MYNEWT_VAL(BLE_MESH_LPN_GROUPS)
+#define CONFIG_BT_MESH_ADV_BUF_COUNT        MYNEWT_VAL(BLE_MESH_ADV_BUF_COUNT)
+#define CONFIG_BT_MESH_FRIEND_QUEUE_SIZE    MYNEWT_VAL(BLE_MESH_FRIEND_QUEUE_SIZE)
+#define CONFIG_BT_MESH_FRIEND_RECV_WIN      MYNEWT_VAL(BLE_MESH_FRIEND_RECV_WIN)
+#define CONFIG_BT_MESH_LPN_POLL_TIMEOUT     MYNEWT_VAL(BLE_MESH_LPN_POLL_TIMEOUT)
+#define CONFIG_BT_MESH_MODEL_GROUP_COUNT    MYNEWT_VAL(BLE_MESH_MODEL_GROUP_COUNT)
+#define CONFIG_BT_MESH_MODEL_KEY_COUNT      MYNEWT_VAL(BLE_MESH_MODEL_KEY_COUNT)
+#define CONFIG_BT_MESH_NODE_ID_TIMEOUT      MYNEWT_VAL(BLE_MESH_NODE_ID_TIMEOUT)
+#define CONFIG_BT_MAX_CONN                  MYNEWT_VAL(BLE_MAX_CONNECTIONS)
+
+#define printk console_printf
+
+#define CONTAINER_OF(ptr, type, field) \
+	((type *)(((char *)(ptr)) - offsetof(type, field)))
+
+
+#define k_sem os_sem
+
+static inline void k_sem_init(struct k_sem *sem, unsigned int initial_count,
+			      unsigned int limit)
+{
+	os_sem_init(sem, initial_count);
+}
+
+static inline int k_sem_take(struct k_sem *sem, s32_t timeout)
+{
+	uint32_t ticks;
+
+	os_time_ms_to_ticks(timeout, &ticks);
+	return - os_sem_pend(sem,  ticks);
+}
+
+static inline void k_sem_give(struct k_sem *sem)
+{
+	os_sem_release(sem);
+}
+
+/* Helpers to access the storage array, since we don't have access to its
+ * type at this point anymore.
+ */
+
+#define BUF_SIZE(pool) (pool->omp_pool->mp_block_size)
+
+static inline int net_buf_id(struct os_mbuf *buf)
+{
+	struct os_mbuf_pool *pool = buf->om_omp;
+	u8_t *pool_start = (u8_t *)pool->omp_pool->mp_membuf_addr;
+	u8_t *buf_ptr = (u8_t *)buf;
+
+	return (buf_ptr - pool_start) / BUF_SIZE(pool);
+}
+
+/* XXX: We should not use os_mbuf_pkthdr chains to represent a list of
+ * packets, this is a hack. For now this is not an issue, because mesh
+ * does not use os_mbuf chains. We should change this in the future.
+ */
+STAILQ_HEAD(net_buf_slist_t, os_mbuf_pkthdr);
+
+void net_buf_slist_init(struct net_buf_slist_t *list);
+bool net_buf_slist_is_empty(struct net_buf_slist_t *list);
+struct os_mbuf *net_buf_slist_peek_head(struct net_buf_slist_t *list);
+struct os_mbuf *net_buf_slist_peek_next(struct os_mbuf *buf);
+struct os_mbuf *net_buf_slist_get(struct net_buf_slist_t *list);
+void net_buf_slist_put(struct net_buf_slist_t *list, struct os_mbuf *buf);
+void net_buf_slist_remove(struct net_buf_slist_t *list, struct os_mbuf *prev,
+			  struct os_mbuf *cur);
+void net_buf_slist_merge_slist(struct net_buf_slist_t *list,
+			       struct net_buf_slist_t *list_to_append);
+#define NET_BUF_SLIST_FOR_EACH_NODE(head, var) STAILQ_FOREACH(var, head, omp_next)
 
 #endif

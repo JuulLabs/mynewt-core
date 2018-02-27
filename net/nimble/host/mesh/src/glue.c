@@ -19,6 +19,7 @@
 
 #include "mesh/glue.h"
 #include "adv.h"
+#define BT_DBG_ENABLED (MYNEWT_VAL(BLE_MESH_DEBUG))
 
 extern u8_t g_mesh_addr_type;
 
@@ -172,6 +173,7 @@ net_buf_simple_add_le16(struct os_mbuf *om, uint16_t val)
 {
     val = htole16(val);
     os_mbuf_append(om, &val, sizeof(val));
+    ASSERT_NOT_CHAIN(om);
 }
 
 void
@@ -179,6 +181,7 @@ net_buf_simple_add_be16(struct os_mbuf *om, uint16_t val)
 {
     val = htobe16(val);
     os_mbuf_append(om, &val, sizeof(val));
+    ASSERT_NOT_CHAIN(om);
 }
 
 void
@@ -186,12 +189,14 @@ net_buf_simple_add_be32(struct os_mbuf *om, uint32_t val)
 {
     val = htobe32(val);
     os_mbuf_append(om, &val, sizeof(val));
+    ASSERT_NOT_CHAIN(om);
 }
 
 void
 net_buf_simple_add_u8(struct os_mbuf *om, uint8_t val)
 {
     os_mbuf_append(om, &val, 1);
+    ASSERT_NOT_CHAIN(om);
 }
 
 void
@@ -207,6 +212,7 @@ net_buf_simple_push_le16(struct os_mbuf *om, uint16_t val)
     if (om->om_pkthdr_len) {
         OS_MBUF_PKTHDR(om)->omp_len += 2;
     }
+    ASSERT_NOT_CHAIN(om);
 }
 
 void
@@ -222,6 +228,7 @@ net_buf_simple_push_be16(struct os_mbuf *om, uint16_t val)
     if (om->om_pkthdr_len) {
         OS_MBUF_PKTHDR(om)->omp_len += 2;
     }
+    ASSERT_NOT_CHAIN(om);
 }
 
 void
@@ -237,6 +244,7 @@ net_buf_simple_push_u8(struct os_mbuf *om, uint8_t val)
     if (om->om_pkthdr_len) {
         OS_MBUF_PKTHDR(om)->omp_len += 1;
     }
+    ASSERT_NOT_CHAIN(om);
 }
 
 void
@@ -251,6 +259,7 @@ net_buf_add_zeros(struct os_mbuf *om, uint8_t len)
     if(rc) {
         assert(0);
     }
+    ASSERT_NOT_CHAIN(om);
 }
 
 void *
@@ -263,7 +272,12 @@ net_buf_simple_pull(struct os_mbuf *om, uint8_t len)
 void*
 net_buf_simple_add(struct os_mbuf *om, uint8_t len)
 {
-    return os_mbuf_extend(om, len);
+    void * tmp;
+
+    tmp = os_mbuf_extend(om, len);
+    ASSERT_NOT_CHAIN(om);
+
+    return tmp;
 }
 
 bool
@@ -326,7 +340,9 @@ k_delayed_work_submit(struct k_delayed_work *w, uint32_t ms)
 {
     uint32_t ticks;
 
-    os_time_ms_to_ticks(ms, &ticks);
+    if (os_time_ms_to_ticks(ms, &ticks) != 0) {
+        assert(0);
+    }
     os_callout_reset(&w->work, ticks);
 }
 
@@ -356,12 +372,12 @@ k_delayed_work_remaining_get (struct k_delayed_work *w)
 
     OS_ENTER_CRITICAL(sr);
 
-    t = os_callout_remaining_ticks(&w->work, os_cputime_get32());
+    t = os_callout_remaining_ticks(&w->work, os_time_get());
 
     OS_EXIT_CRITICAL(sr);
 
     /* We should return ms */
-    return os_cputime_ticks_to_usecs(t) / 1000;
+    return t / OS_TICKS_PER_SEC * 1000;
 }
 
 int64_t k_uptime_get(void)
@@ -490,4 +506,93 @@ bt_mesh_register_gatt(void)
 #if MYNEWT_VAL(BLE_MESH_PROXY)
     bt_mesh_proxy_svcs_register();
 #endif
+}
+
+void net_buf_slist_init(struct net_buf_slist_t *list)
+{
+	STAILQ_INIT(list);
+}
+
+bool net_buf_slist_is_empty(struct net_buf_slist_t *list)
+{
+	return STAILQ_EMPTY(list);
+}
+
+struct os_mbuf *net_buf_slist_peek_head(struct net_buf_slist_t *list)
+{
+	struct os_mbuf_pkthdr *pkthdr;
+
+	/* Get mbuf pointer from packet header pointer */
+	pkthdr = STAILQ_FIRST(list);
+	if (!pkthdr) {
+		return NULL;
+	}
+
+	return OS_MBUF_PKTHDR_TO_MBUF(pkthdr);
+}
+
+struct os_mbuf *net_buf_slist_peek_next(struct os_mbuf *buf)
+{
+	struct os_mbuf_pkthdr *pkthdr;
+
+	/* Get mbuf pointer from packet header pointer */
+	pkthdr = OS_MBUF_PKTHDR(buf);
+	pkthdr = STAILQ_NEXT(pkthdr, omp_next);
+	if (!pkthdr) {
+		return NULL;
+	}
+
+	return OS_MBUF_PKTHDR_TO_MBUF(pkthdr);
+}
+
+struct os_mbuf *net_buf_slist_get(struct net_buf_slist_t *list)
+{
+	os_sr_t sr;
+	struct os_mbuf *m;
+
+	m = net_buf_slist_peek_head(list);
+	if (!m) {
+		return NULL;
+	}
+
+	/* Remove from queue */
+	OS_ENTER_CRITICAL(sr);
+	STAILQ_REMOVE_HEAD(list, omp_next);
+	OS_EXIT_CRITICAL(sr);
+	return m;
+}
+
+void net_buf_slist_put(struct net_buf_slist_t *list, struct os_mbuf *buf)
+{
+	struct os_mbuf_pkthdr *pkthdr;
+
+	pkthdr = OS_MBUF_PKTHDR(buf);
+	STAILQ_INSERT_TAIL(list, pkthdr, omp_next);
+}
+
+void net_buf_slist_remove(struct net_buf_slist_t *list, struct os_mbuf *prev,
+			  struct os_mbuf *cur)
+{
+	struct os_mbuf_pkthdr *pkthdr, *cur_pkthdr;
+
+	cur_pkthdr = OS_MBUF_PKTHDR(cur);
+
+	STAILQ_FOREACH(pkthdr, list, omp_next) {
+		if (cur_pkthdr == pkthdr) {
+			STAILQ_REMOVE(list, cur_pkthdr, os_mbuf_pkthdr, omp_next);
+			break;
+		}
+	}
+}
+
+void net_buf_slist_merge_slist(struct net_buf_slist_t *list,
+			       struct net_buf_slist_t *list_to_append)
+{
+	struct os_mbuf_pkthdr *pkthdr;
+
+	STAILQ_FOREACH(pkthdr, list_to_append, omp_next) {
+		STAILQ_INSERT_TAIL(list, pkthdr, omp_next);
+	}
+
+	STAILQ_INIT(list);
 }

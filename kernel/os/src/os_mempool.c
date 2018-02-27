@@ -29,14 +29,44 @@
  *   @defgroup OSMempool Memory Pools
  *   @{
  */
-/*
-#define OS_CHECK_DUP_FREE 1
-*/
 
-#define OS_MEMPOOL_TRUE_BLOCK_SIZE(bsize)   OS_ALIGN(bsize, OS_ALIGNMENT)
+#define OS_MEM_TRUE_BLOCK_SIZE(bsize)   OS_ALIGN(bsize, OS_ALIGNMENT)
+#define OS_MEMPOOL_TRUE_BLOCK_SIZE(mp) OS_MEM_TRUE_BLOCK_SIZE(mp->mp_block_size)
 
 STAILQ_HEAD(, os_mempool) g_os_mempool_list =
     STAILQ_HEAD_INITIALIZER(g_os_mempool_list);
+
+#if MYNEWT_VAL(OS_MEMPOOL_POISON)
+static uint32_t os_mem_poison = 0xde7ec7ed;
+
+static void
+os_mempool_poison(void *start, int sz)
+{
+    int i;
+    char *p = start;
+
+    for (i = sizeof(struct os_memblock); i < sz;
+         i = i + sizeof(os_mem_poison)) {
+        memcpy(p + i, &os_mem_poison, min(sizeof(os_mem_poison), sz - i));
+    }
+}
+
+static void
+os_mempool_poison_check(void *start, int sz)
+{
+    int i;
+    char *p = start;
+
+    for (i = sizeof(struct os_memblock); i < sz;
+         i = i + sizeof(os_mem_poison)) {
+        assert(!memcmp(p + i, &os_mem_poison,
+               min(sizeof(os_mem_poison), sz - i)));
+    }
+}
+#else
+#define os_mempool_poison(start, sz)
+#define os_mempool_poison_check(start, sz)
+#endif
 
 /**
  * os mempool init
@@ -52,7 +82,7 @@ STAILQ_HEAD(, os_mempool) g_os_mempool_list =
  * @return os_error_t
  */
 os_error_t
-os_mempool_init(struct os_mempool *mp, int blocks, int block_size,
+os_mempool_init(struct os_mempool *mp, uint16_t blocks, uint32_t block_size,
                 void *membuf, char *name)
 {
     int true_block_size;
@@ -60,7 +90,7 @@ os_mempool_init(struct os_mempool *mp, int blocks, int block_size,
     struct os_memblock *block_ptr;
 
     /* Check for valid parameters */
-    if ((!mp) || (blocks < 0) || (block_size <= 0)) {
+    if (!mp || (blocks < 0) || (block_size <= 0)) {
         return OS_INVALID_PARM;
     }
 
@@ -76,15 +106,17 @@ os_mempool_init(struct os_mempool *mp, int blocks, int block_size,
             return OS_MEM_NOT_ALIGNED;
         }
     }
-    true_block_size = OS_MEMPOOL_TRUE_BLOCK_SIZE(block_size);
+    true_block_size = OS_MEM_TRUE_BLOCK_SIZE(block_size);
 
     /* Initialize the memory pool structure */
     mp->mp_block_size = block_size;
     mp->mp_num_free = blocks;
     mp->mp_min_free = blocks;
+    mp->mp_flags = 0;
     mp->mp_num_blocks = blocks;
     mp->mp_membuf_addr = (uint32_t)membuf;
     mp->name = name;
+    os_mempool_poison(membuf, true_block_size);
     SLIST_FIRST(mp) = membuf;
 
     /* Chain the memory blocks to the free list */
@@ -92,6 +124,7 @@ os_mempool_init(struct os_mempool *mp, int blocks, int block_size,
     block_ptr = (struct os_memblock *)block_addr;
     while (blocks > 1) {
         block_addr += true_block_size;
+        os_mempool_poison(block_addr, true_block_size);
         SLIST_NEXT(block_ptr, mb_next) = (struct os_memblock *)block_addr;
         block_ptr = (struct os_memblock *)block_addr;
         --blocks;
@@ -103,6 +136,37 @@ os_mempool_init(struct os_mempool *mp, int blocks, int block_size,
     STAILQ_INSERT_TAIL(&g_os_mempool_list, mp, mp_list);
 
     return OS_OK;
+}
+
+/**
+ * Initializes an extended memory pool.  Extended attributes (e.g., callbacks)
+ * are not specified when this function is called; they are assigned manually
+ * after initialization.
+ *
+ * @param mpe           The extended memory pool to initialize.
+ * @param blocks        The number of blocks in the pool.
+ * @param block_size    The size of each block, in bytes.
+ * @param membuf        Pointer to memory to contain blocks.
+ * @param name          Name of the pool.
+ *
+ * @return os_error_t
+ */
+os_error_t
+os_mempool_ext_init(struct os_mempool_ext *mpe, uint16_t blocks,
+                    uint32_t block_size, void *membuf, char *name)
+{
+    int rc;
+
+    rc = os_mempool_init(&mpe->mpe_mp, blocks, block_size, membuf, name);
+    if (rc != 0) {
+        return rc;
+    }
+
+    mpe->mpe_mp.mp_flags = OS_MEMPOOL_F_EXT;
+    mpe->mpe_put_cb = NULL;
+    mpe->mpe_put_arg = NULL;
+
+    return 0;
 }
 
 /**
@@ -125,6 +189,7 @@ os_mempool_is_sane(const struct os_mempool *mp)
         if (!os_memblock_from(mp, block)) {
             return false;
         }
+        os_mempool_poison_check(block, OS_MEMPOOL_TRUE_BLOCK_SIZE(mp));
     }
 
     return true;
@@ -150,7 +215,7 @@ os_memblock_from(const struct os_mempool *mp, const void *block_addr)
                    "Pointer to void must be 32-bits.");
 
     baddr32 = (uint32_t)block_addr;
-    true_block_size = OS_MEMPOOL_TRUE_BLOCK_SIZE(mp->mp_block_size);
+    true_block_size = OS_MEMPOOL_TRUE_BLOCK_SIZE(mp);
     end = mp->mp_membuf_addr + (mp->mp_num_blocks * true_block_size);
 
     /* Check that the block is in the memory buffer range. */
@@ -190,6 +255,8 @@ os_memblock_get(struct os_mempool *mp)
             /* Get a free block */
             block = SLIST_FIRST(mp);
 
+            os_mempool_poison_check(block, OS_MEMPOOL_TRUE_BLOCK_SIZE(mp));
+
             /* Set new free list head */
             SLIST_FIRST(mp) = SLIST_NEXT(block, mb_next);
 
@@ -206,9 +273,11 @@ os_memblock_get(struct os_mempool *mp)
 }
 
 /**
- * os memblock put
+ * os memblock put from cb
  *
- * Puts the memory block back into the pool
+ * Puts the memory block back into the pool, ignoring the put callback, if any.
+ * This function should only be called from a put callback to free a block
+ * without causing infinite recursion.
  *
  * @param mp Pointer to memory pool
  * @param block_addr Pointer to memory block
@@ -216,26 +285,13 @@ os_memblock_get(struct os_mempool *mp)
  * @return os_error_t
  */
 os_error_t
-os_memblock_put(struct os_mempool *mp, void *block_addr)
+os_memblock_put_from_cb(struct os_mempool *mp, void *block_addr)
 {
     os_sr_t sr;
     struct os_memblock *block;
 
-    /* Make sure parameters are valid */
-    if ((mp == NULL) || (block_addr == NULL)) {
-        return OS_INVALID_PARM;
-    }
+    os_mempool_poison(block_addr, OS_MEMPOOL_TRUE_BLOCK_SIZE(mp));
 
-    /* Check that the block we are freeing is a valid block! */
-    if (!os_memblock_from(mp, block_addr)) {
-        return OS_INVALID_PARM;
-    }
-
-#ifdef OS_CHECK_DUP_FREE
-    SLIST_FOREACH(block, mp, mb_next) {
-        assert(block != (struct os_memblock *)block_addr);
-    }
-#endif
     block = (struct os_memblock *)block_addr;
     OS_ENTER_CRITICAL(sr);
 
@@ -252,6 +308,56 @@ os_memblock_put(struct os_mempool *mp, void *block_addr)
     return OS_OK;
 }
 
+/**
+ * os memblock put
+ *
+ * Puts the memory block back into the pool
+ *
+ * @param mp Pointer to memory pool
+ * @param block_addr Pointer to memory block
+ *
+ * @return os_error_t
+ */
+os_error_t
+os_memblock_put(struct os_mempool *mp, void *block_addr)
+{
+    struct os_mempool_ext *mpe;
+    int rc;
+#if MYNEWT_VAL(OS_MEMPOOL_CHECK)
+    struct os_memblock *block;
+#endif
+
+    /* Make sure parameters are valid */
+    if ((mp == NULL) || (block_addr == NULL)) {
+        return OS_INVALID_PARM;
+    }
+
+#if MYNEWT_VAL(OS_MEMPOOL_CHECK)
+    /* Check that the block we are freeing is a valid block! */
+    assert(os_memblock_from(mp, block_addr));
+
+    /*
+     * Check for duplicate free.
+     */
+    SLIST_FOREACH(block, mp, mb_next) {
+        assert(block != (struct os_memblock *)block_addr);
+    }
+#endif
+
+    /* If this is an extended mempool with a put callback, call the callback
+     * instead of freeing the block directly.
+     */
+    if (mp->mp_flags & OS_MEMPOOL_F_EXT) {
+        mpe = (struct os_mempool_ext *)mp;
+        if (mpe->mpe_put_cb != NULL) {
+            rc = mpe->mpe_put_cb(mpe, block_addr, mpe->mpe_put_arg);
+            return rc;
+        }
+    }
+
+    /* No callback; free the block. */
+    return os_memblock_put_from_cb(mp, block_addr);
+}
 
 struct os_mempool *
 os_mempool_info_get_next(struct os_mempool *mp, struct os_mempool_info *omi)

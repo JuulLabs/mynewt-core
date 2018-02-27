@@ -31,6 +31,9 @@ extern "C" {
 #include "os/os.h"
 #include "syscfg/syscfg.h"
 
+/* The number of advertising instances */
+#define BLE_ADV_INSTANCES    (MYNEWT_VAL(BLE_MULTI_ADV_INSTANCES) + 1)
+
 /* BLE encryption block definitions */
 #define BLE_ENC_BLOCK_SIZE       (16)
 
@@ -146,6 +149,9 @@ struct ble_mbuf_hdr
 
 #define BLE_MBUF_MEMBLOCK_OVERHEAD      \
     (sizeof(struct os_mbuf) + BLE_MBUF_PKTHDR_OVERHEAD)
+
+/* Length of host user header.  Only contains the peer's connection handle. */
+#define BLE_MBUF_HS_HDR_LEN     (2)
 
 #define BLE_DEV_ADDR_LEN        (6)
 extern uint8_t g_dev_addr[BLE_DEV_ADDR_LEN];

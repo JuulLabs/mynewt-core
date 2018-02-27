@@ -19,10 +19,7 @@
 #include <string.h>
 #include "sysinit/sysinit.h"
 #include "syscfg/syscfg.h"
-#include "os/os.h"
-#include "node/lora.h"
 #include "node/lora_priv.h"
-#include "node/mac/LoRaMac.h"
 
 STATS_SECT_DECL(lora_mac_stats) lora_mac_stats;
 STATS_NAME_START(lora_mac_stats)
@@ -44,15 +41,6 @@ STATS_NAME_START(lora_mac_stats)
     STATS_NAME(lora_mac_stats, rx_mcps)
 STATS_NAME_END(lora_mac_stats)
 
-STATS_SECT_DECL(lora_stats) lora_stats;
-STATS_NAME_START(lora_stats)
-    STATS_NAME(lora_stats, rx_error)
-    STATS_NAME(lora_stats, rx_success)
-    STATS_NAME(lora_stats, rx_timeout)
-    STATS_NAME(lora_stats, tx_success)
-    STATS_NAME(lora_stats, tx_timeout)
-STATS_NAME_END(lora_stats)
-
 /* Device EUI */
 uint8_t g_lora_dev_eui[LORA_EUI_LEN];
 
@@ -65,10 +53,6 @@ uint8_t g_lora_app_key[LORA_KEY_LEN];
 /* Flag to denote if we last sent a mac command */
 uint8_t g_lora_node_last_tx_mac_cmd;
 
-#if !MYNEWT_VAL(LORA_NODE_CLI)
-LoRaMacPrimitives_t g_lora_primitives;
-#endif
-
 /* MAC task */
 #define LORA_MAC_STACK_SIZE   (256)
 struct os_task g_lora_mac_task;
@@ -77,25 +61,6 @@ os_stack_t g_lora_mac_stack[LORA_MAC_STACK_SIZE];
 /*
  * Lora MAC data object
  */
-struct lora_mac_obj
-{
-    /* Task event queue */
-    struct os_eventq lm_evq;
-
-    /* Transmit queue */
-    struct os_mqueue lm_txq;
-
-    /* Join event */
-    struct os_event lm_join_ev;
-
-    /* Link check event */
-    struct os_event lm_link_chk_ev;
-
-    /* TODO: this is temporary until we figure out a better way to deal */
-    /* Transmit queue timer */
-    struct os_callout lm_txq_timer;
-};
-
 struct lora_mac_obj g_lora_mac_data;
 
 /* The join event argument */
@@ -153,23 +118,6 @@ lora_pkt_alloc(void)
     p = os_msys_get_pkthdr(255, sizeof(struct lora_pkt_info));
     return p;
 }
-
-#if !MYNEWT_VAL(LORA_NODE_CLI)
-static struct os_mbuf *
-lora_node_alloc_empty_pkt(void)
-{
-    struct os_mbuf *om;
-    struct lora_pkt_info *lpkt;
-
-    om = lora_pkt_alloc();
-    if (om) {
-        lpkt = LORA_PKT_INFO_PTR(om);
-        lpkt->port = 0;
-        lpkt->pkt_type = MCPS_UNCONFIRMED;
-    }
-    return om;
-}
-#endif
 
 /**
  * This is the application to mac layer transmit interface.
@@ -238,39 +186,13 @@ lora_node_txq_empty(void)
     return rc;
 }
 
-/* MAC MCPS-Confirm primitive */
-static void
-lora_node_mac_mcps_confirm(McpsConfirm_t *confirm)
-{
-    struct os_mbuf *om;
-    struct lora_pkt_info *lpkt;
-
-    /*
-     * XXX: note that datarate and retries were set when the
-     * request was made. They could have changed. Do we need
-     * to preserve original values?
-     */
-
-    /* Copy confirmation info into lora packet info */
-    om = confirm->om;
-    if (om == NULL) {
-        return;
-    }
-    lpkt = LORA_PKT_INFO_PTR(om);
-    lpkt->status = confirm->Status;
-    lpkt->txdinfo.datarate = confirm->Datarate;
-    lpkt->txdinfo.txpower = confirm->TxPower;
-    lpkt->txdinfo.ack_rxd = confirm->AckReceived;
-    lpkt->txdinfo.retries = confirm->NbRetries;
-    lpkt->txdinfo.tx_time_on_air = confirm->TxTimeOnAir;
-    lpkt->txdinfo.uplink_cntr = confirm->UpLinkCounter;
-    lpkt->txdinfo.uplink_freq = confirm->UpLinkFrequency;
-    lora_app_mcps_confirm(om);
-}
-
-/* MAC MCPS-Indicate primitive  */
-static void
-lora_node_mac_mcps_indicate(McpsIndication_t *ind)
+/**
+ * lora node mac mcps indicate
+ *
+ * MAC indication handler
+ */
+void
+lora_node_mac_mcps_indicate(void)
 {
     int rc;
     struct os_mbuf *om;
@@ -280,7 +202,7 @@ lora_node_mac_mcps_indicate(McpsIndication_t *ind)
      * Not sure if this is possible, but port 0 is not a valid application port.
      * If the port is 0 do not send indicate
      */
-    if (ind->Port == 0) {
+    if (g_lora_mac_data.rxpkt.port == 0) {
         /* XXX: count a statistic? */
         return;
     }
@@ -288,7 +210,8 @@ lora_node_mac_mcps_indicate(McpsIndication_t *ind)
     om = lora_pkt_alloc();
     if (om) {
         /* Copy data into mbuf */
-        rc = os_mbuf_copyinto(om, 0, ind->Buffer, ind->BufferSize);
+        rc = os_mbuf_copyinto(om, 0, g_lora_mac_data.rxbuf,
+                              g_lora_mac_data.rxbufsize);
         if (rc) {
             os_mbuf_free_chain(om);
             return;
@@ -296,44 +219,10 @@ lora_node_mac_mcps_indicate(McpsIndication_t *ind)
 
         /* Set lora packet info */
         lpkt = LORA_PKT_INFO_PTR(om);
-        lpkt->status = ind->Status;
-        lpkt->pkt_type = ind->McpsIndication;
-        lpkt->port = ind->Port;
-        lpkt->rxdinfo.rxdatarate = ind->RxDatarate;
-        lpkt->rxdinfo.rxdata = ind->RxData;
-        lpkt->rxdinfo.snr = ind->Snr;
-        lpkt->rxdinfo.rssi = ind->Rssi;
-        lpkt->rxdinfo.frame_pending = ind->FramePending == 0 ? 0 : 1;
-        lpkt->rxdinfo.ack_rxd = ind->AckReceived;
-        lpkt->rxdinfo.downlink_cntr = ind->DownLinkCounter;
-        lpkt->rxdinfo.rxslot = ind->RxSlot;
+        memcpy(lpkt, &g_lora_mac_data.rxpkt, sizeof(struct lora_pkt_info));
         lora_app_mcps_indicate(om);
     } else {
         /* XXX: cant do anything until the lower stack gets modified */
-    }
-}
-
-/**
- * This is the LoRaMac stack Confirm primitive. It is called by the LoRaMac
- * stack upon completion of a MLME service.
- *
- * @param confirm
- */
-static void
-lora_node_mac_mlme_confirm(MlmeConfirm_t *confirm)
-{
-    /* XXX: do we need the time on air for MLME packets? */
-    switch (confirm->MlmeRequest) {
-    case MLME_JOIN:
-        lora_app_join_confirm(confirm->Status, confirm->NbRetries);
-        break;
-    case MLME_LINK_CHECK:
-        lora_app_link_chk_confirm(confirm->Status, confirm->NbGateways,
-                                  confirm->DemodMargin);
-        break;
-    default:
-        /* Nothing to do here */
-        break;
     }
 }
 
@@ -353,7 +242,6 @@ lora_node_get_batt_status(void)
 static void
 lora_mac_proc_tx_q_event(struct os_event *ev)
 {
-    McpsReq_t req;
     LoRaMacStatus_t rc;
     LoRaMacEventInfoStatus_t evstatus;
     LoRaMacTxInfo_t txinfo;
@@ -372,14 +260,6 @@ lora_mac_proc_tx_q_event(struct os_event *ev)
     }
 
     /*
-     * WWW: what I need to determine is what happens in the following case:
-     * a Mac command gets added to the buffer but we have nothing on the
-     * transmit queue. What do we do? I do not think we currently
-     * send the response until another frame is enqueued. Need to
-     * look at this. I think I should just send the response back
-     */
-
-    /*
      * Check if possible to send frame. If a MAC command length error we
      * need to send an empty, unconfirmed frame to flush mac commands.
      */
@@ -387,9 +267,16 @@ lora_mac_proc_tx_q_event(struct os_event *ev)
     while (1) {
         mp = STAILQ_FIRST(&g_lora_mac_data.lm_txq.mq_head);
         if (mp == NULL) {
+            /* If an ack has been requested, send one */
             if (lora_mac_srv_ack_requested()) {
                 g_lora_node_last_tx_mac_cmd = 0;
-                goto send_empty_ack;
+                goto send_empty_msg;
+            } else {
+                /* Check for any mac commands */
+                if (lora_mac_cmd_buffer_len() != 0) {
+                    g_lora_node_last_tx_mac_cmd = 1;
+                    goto send_empty_msg;
+                }
             }
             break;
         }
@@ -413,21 +300,23 @@ lora_mac_proc_tx_q_event(struct os_event *ev)
             /* Need to flush MAC commands. Send empty unconfirmed frame */
             STATS_INC(lora_mac_stats, tx_mac_flush);
             /* NOTE: no need to get a mbuf. */
-send_empty_ack:
-            lpkt = NULL;
+send_empty_msg:
+            lpkt = &g_lora_mac_data.txpkt;
+            g_lora_mac_data.curtx = lpkt;
             om = NULL;
-            memset(&req, 0, sizeof(McpsReq_t));
-            req.Type = MCPS_UNCONFIRMED;
+            memset(lpkt, 0, sizeof(struct lora_pkt_info));
+            lpkt->pkt_type = MCPS_UNCONFIRMED;
             rc = LORAMAC_STATUS_OK;
         } else {
 send_from_txq:
             om = os_mqueue_get(&g_lora_mac_data.lm_txq);
             assert(om != NULL);
             lpkt = LORA_PKT_INFO_PTR(om);
-            req.om = om;
-            req.Type = lpkt->pkt_type;
+            g_lora_mac_data.curtx = lpkt;
             g_lora_node_last_tx_mac_cmd = 0;
         }
+
+        g_lora_mac_data.cur_tx_mbuf = om;
 
         if (rc != LORAMAC_STATUS_OK) {
             /* Check if length error or mac command error */
@@ -440,16 +329,11 @@ send_from_txq:
         }
 
         /* Form MCPS request */
-        switch (req.Type) {
+        switch (lpkt->pkt_type) {
         case MCPS_UNCONFIRMED:
-            if (lpkt) {
-                req.Req.Unconfirmed.fPort = lpkt->port;
-            }
             evstatus = LORAMAC_EVENT_INFO_STATUS_OK;
             break;
         case MCPS_CONFIRMED:
-            req.Req.Confirmed.fPort = lpkt->port;
-            req.Req.Confirmed.NbTrials = lpkt->txdinfo.retries;
             evstatus = LORAMAC_EVENT_INFO_STATUS_OK;
             break;
         case MCPS_PROPRIETARY:
@@ -463,7 +347,7 @@ send_from_txq:
         }
 
         if (evstatus == LORAMAC_EVENT_INFO_STATUS_OK) {
-            rc = LoRaMacMcpsRequest(&req);
+            rc = LoRaMacMcpsRequest(om, lpkt);
             switch (rc) {
             case LORAMAC_STATUS_OK:
                 /* Transmission started. */
@@ -492,10 +376,8 @@ send_from_txq:
          * continue processing transmit queue.
          */
 proc_txq_om_done:
-        if (lpkt) {
-            lpkt->status = evstatus;
-            lora_app_mcps_confirm(om);
-        }
+        lpkt->status = evstatus;
+        lora_app_mcps_confirm(om);
     }
 }
 
@@ -626,14 +508,21 @@ lora_mac_join_event(struct os_event *ev)
     }
 }
 
+/**
+ * lora mac link chk event
+ *
+ * Called from the Lora MAC task when a link check event has been posted
+ * to it. This event gets posted when link check API gets called.
+ *
+ *
+ * @param ev
+ */
 static void
 lora_mac_link_chk_event(struct os_event *ev)
 {
-    int err;
     MlmeReq_t mlmeReq;
     LoRaMacStatus_t rc;
     LoRaMacEventInfoStatus_t status;
-    struct os_mbuf *om;
 
     mlmeReq.Type = MLME_LINK_CHECK;
     rc = LoRaMacMlmeRequest(&mlmeReq);
@@ -647,6 +536,8 @@ lora_mac_link_chk_event(struct os_event *ev)
         break;
     }
 
+    lora_node_log(LORA_NODE_LOG_LINK_CHK, 0, 0, status);
+
     /* If status is OK */
     if (status != LORAMAC_EVENT_INFO_STATUS_OK) {
         if (lora_link_chk_cb_func) {
@@ -654,17 +545,11 @@ lora_mac_link_chk_event(struct os_event *ev)
         }
     } else {
         /*
-         * If nothing on transmit queue this will sit around until the
-         * application decides to send its next packet. In this case, we
-         * create a dummy frame to send the command.
+         * If nothing on transmit queue, we need to send event so that link
+         * check gets sent.
          */
         if (lora_node_txq_empty()) {
-            om = lora_node_alloc_empty_pkt();
-            if (om) {
-                err = os_mqueue_put(&g_lora_mac_data.lm_txq,
-                                 &g_lora_mac_data.lm_evq, om);
-                assert(err == 0);
-            }
+            lora_node_chk_txq();
         }
     }
 }
@@ -685,12 +570,6 @@ lora_node_init(void)
     LoRaMacStatus_t lms;
     LoRaMacCallback_t lora_cb;
 #endif
-
-    rc = stats_init_and_reg(
-        STATS_HDR(lora_stats),
-        STATS_SIZE_INIT_PARMS(lora_stats, STATS_SIZE_32),
-        STATS_NAME_INIT_PARMS(lora_stats), "lora");
-    SYSINIT_PANIC_ASSERT(rc == 0);
 
     rc = stats_init_and_reg(
         STATS_HDR(lora_mac_stats),
@@ -728,12 +607,9 @@ lora_node_init(void)
                     &g_lora_mac_data.lm_evq, lora_mac_txq_timer_cb, NULL);
 
     /* Initialize the LoRa mac */
-    g_lora_primitives.MacMcpsConfirm = lora_node_mac_mcps_confirm;
-    g_lora_primitives.MacMcpsIndication = lora_node_mac_mcps_indicate;
-    g_lora_primitives.MacMlmeConfirm = lora_node_mac_mlme_confirm;
     lora_cb.GetBatteryLevel = lora_node_get_batt_status;
 
-    lms = LoRaMacInitialization(&g_lora_primitives, &lora_cb);
+    lms = LoRaMacInitialization(&lora_cb);
     assert(lms == LORAMAC_STATUS_OK);
 #endif
 }

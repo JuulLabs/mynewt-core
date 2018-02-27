@@ -38,7 +38,6 @@
 #include "controller/ble_ll_whitelist.h"
 #include "controller/ble_ll_resolv.h"
 #include "ble_ll_conn_priv.h"
-#include "hal/hal_gpio.h"
 
 /* XXX: TODO
  * 1) Need to look at advertising and scan request PDUs. Do I allocate these
@@ -51,6 +50,16 @@
  * 5) How does the advertising channel tx power get set? I dont implement
  * that currently.
  */
+
+/* Scheduling data for secondary channel */
+struct ble_ll_adv_aux {
+    struct ble_ll_sched_item sch;
+    uint32_t start_time;
+    uint16_t aux_data_offset;
+    uint8_t ext_hdr;
+    uint8_t aux_data_len;
+    uint8_t payload_len;
+};
 
 /*
  * Advertising state machine
@@ -72,13 +81,11 @@ struct ble_ll_adv_sm
 {
     uint8_t adv_enabled;
     uint8_t adv_instance;
-    uint8_t adv_len;
     uint8_t adv_chanmask;
     uint8_t adv_filter_policy;
     uint8_t own_addr_type;
     uint8_t peer_addr_type;
     uint8_t adv_chan;
-    uint8_t scan_rsp_len;
     uint8_t adv_pdu_len;
     int8_t adv_rpa_index;
     uint8_t flags;
@@ -95,14 +102,19 @@ struct ble_ll_adv_sm
     uint8_t adv_rpa[BLE_DEV_ADDR_LEN];
     uint8_t peer_addr[BLE_DEV_ADDR_LEN];
     uint8_t initiator_addr[BLE_DEV_ADDR_LEN];
-    uint8_t adv_data[BLE_ADV_DATA_MAX_LEN];
-    uint8_t scan_rsp_data[BLE_SCAN_RSP_DATA_MAX_LEN];
+    struct os_mbuf *adv_data;
+    struct os_mbuf *scan_rsp_data;
     uint8_t *conn_comp_ev;
     struct os_event adv_txdone_ev;
     struct ble_ll_sched_item adv_sch;
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
-    uint32_t adv_secondary_start_time;
-    struct ble_ll_sched_item adv_secondary_sch;
+    uint8_t aux_active : 1;
+    uint8_t aux_index : 1;
+    uint8_t aux_first_pdu : 1;
+    uint8_t aux_not_scanned : 1;
+    struct ble_mbuf_hdr *rx_ble_hdr;
+    struct os_mbuf **aux_data;
+    struct ble_ll_adv_aux aux[2];
     struct os_event adv_sec_txdone_ev;
     uint16_t duration;
     uint16_t adi;
@@ -120,6 +132,17 @@ struct ble_ll_adv_sm
 #define BLE_LL_ADV_SM_FLAG_SCAN_REQ_NOTIF       0x04
 #define BLE_LL_ADV_SM_FLAG_CONN_RSP_TXD         0x08
 #define BLE_LL_ADV_SM_FLAG_ACTIVE_CHANSET_MASK  0x30 /* use helpers! */
+#define BLE_LL_ADV_SM_FLAG_ADV_DATA_INCOMPLETE  0x40
+
+#define ADV_DATA_LEN(_advsm) \
+                ((_advsm->adv_data) ? OS_MBUF_PKTLEN(advsm->adv_data) : 0)
+#define SCAN_RSP_DATA_LEN(_advsm) \
+                ((_advsm->scan_rsp_data) ? OS_MBUF_PKTLEN(advsm->scan_rsp_data) : 0)
+#define AUX_DATA_LEN(_advsm) \
+                (*(_advsm->aux_data) ? OS_MBUF_PKTLEN(*advsm->aux_data) : 0)
+
+#define AUX_CURRENT(_advsm)     (&(_advsm->aux[_advsm->aux_index]))
+#define AUX_NEXT(_advsm)        (&(_advsm->aux[_advsm->aux_index ^ 1]))
 
 static inline int
 ble_ll_adv_active_chanset_is_pri(struct ble_ll_adv_sm *advsm)
@@ -156,13 +179,45 @@ ble_ll_adv_active_chanset_set_sec(struct ble_ll_adv_sm *advsm)
 }
 
 /* The advertising state machine global object */
-struct ble_ll_adv_sm g_ble_ll_adv_sm[BLE_LL_ADV_INSTANCES];
+struct ble_ll_adv_sm g_ble_ll_adv_sm[BLE_ADV_INSTANCES];
 struct ble_ll_adv_sm *g_ble_ll_cur_adv_sm;
 
 static void ble_ll_adv_make_done(struct ble_ll_adv_sm *advsm, struct ble_mbuf_hdr *hdr);
 static void ble_ll_adv_sm_init(struct ble_ll_adv_sm *advsm);
 
 #if (MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_PRIVACY) == 1)
+static void
+ble_ll_adv_rpa_update(struct ble_ll_adv_sm *advsm)
+{
+    ble_ll_resolv_gen_rpa(advsm->peer_addr, advsm->peer_addr_type,
+                          advsm->adva, 1);
+
+    if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_DIRECTED) {
+        ble_ll_resolv_gen_rpa(advsm->peer_addr, advsm->peer_addr_type,
+                              advsm->initiator_addr, 0);
+        if (ble_ll_is_rpa(advsm->initiator_addr, 1)) {
+            advsm->flags |= BLE_LL_ADV_SM_FLAG_RX_ADD;
+        } else {
+            if (advsm->own_addr_type & 1) {
+                advsm->flags |= BLE_LL_ADV_SM_FLAG_RX_ADD;
+            } else {
+                advsm->flags &= ~BLE_LL_ADV_SM_FLAG_RX_ADD;
+            }
+        }
+    }
+
+    /* May have to reset txadd bit */
+    if (ble_ll_is_rpa(advsm->adva, 1)) {
+        advsm->flags |= BLE_LL_ADV_SM_FLAG_TX_ADD;
+    } else {
+        if (advsm->own_addr_type & 1) {
+            advsm->flags |= BLE_LL_ADV_SM_FLAG_TX_ADD;
+        } else {
+            advsm->flags &= ~BLE_LL_ADV_SM_FLAG_TX_ADD;
+        }
+    }
+}
+
 /**
  * Called to change advertisers ADVA and INITA (for directed advertisements)
  * as an advertiser needs to adhere to the resolvable private address generation
@@ -185,38 +240,14 @@ ble_ll_adv_chk_rpa_timeout(struct ble_ll_adv_sm *advsm)
 {
     uint32_t now;
 
-    if (advsm->own_addr_type > BLE_HCI_ADV_OWN_ADDR_RANDOM) {
-        now = os_time_get();
-        if ((int32_t)(now - advsm->adv_rpa_timer) >= 0) {
-            ble_ll_resolv_gen_rpa(advsm->peer_addr, advsm->peer_addr_type,
-                                  advsm->adva, 1);
+    if (advsm->own_addr_type < BLE_HCI_ADV_OWN_ADDR_PRIV_PUB) {
+        return;
+    }
 
-            if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_DIRECTED) {
-                ble_ll_resolv_gen_rpa(advsm->peer_addr, advsm->peer_addr_type,
-                                      advsm->initiator_addr, 0);
-                if (ble_ll_is_rpa(advsm->initiator_addr, 1)) {
-                    advsm->flags |= BLE_LL_ADV_SM_FLAG_RX_ADD;
-                } else {
-                    if (advsm->own_addr_type & 1) {
-                        advsm->flags |= BLE_LL_ADV_SM_FLAG_RX_ADD;
-                    } else {
-                        advsm->flags &= ~BLE_LL_ADV_SM_FLAG_RX_ADD;
-                    }
-                }
-            }
-            advsm->adv_rpa_timer = now + ble_ll_resolv_get_rpa_tmo();
-
-            /* May have to reset txadd bit */
-            if (ble_ll_is_rpa(advsm->adva, 1)) {
-                advsm->flags |= BLE_LL_ADV_SM_FLAG_TX_ADD;
-            } else {
-                if (advsm->own_addr_type & 1) {
-                    advsm->flags |= BLE_LL_ADV_SM_FLAG_TX_ADD;
-                } else {
-                    advsm->flags &= ~BLE_LL_ADV_SM_FLAG_TX_ADD;
-                }
-            }
-        }
+    now = os_time_get();
+    if ((int32_t)(now - advsm->adv_rpa_timer) >= 0) {
+        ble_ll_adv_rpa_update(advsm);
+        advsm->adv_rpa_timer = now + ble_ll_resolv_get_rpa_tmo();
     }
 }
 #endif
@@ -275,16 +306,18 @@ ble_ll_adv_final_chan(struct ble_ll_adv_sm *advsm)
  *
  * @param advsm Pointer to advertisement state machine
  */
-static void
-ble_ll_adv_legacy_pdu_make(struct ble_ll_adv_sm *advsm, struct os_mbuf *m)
+static uint8_t
+ble_ll_adv_legacy_pdu_make(uint8_t *dptr, void *pducb_arg, uint8_t *hdr_byte)
 {
+    struct ble_ll_adv_sm *advsm;
     uint8_t     adv_data_len;
-    uint8_t     *dptr;
     uint8_t     pdulen;
     uint8_t     pdu_type;
 
+    advsm = pducb_arg;
+
     /* assume this is not a direct ind */
-    adv_data_len = advsm->adv_len;
+    adv_data_len = ADV_DATA_LEN(advsm);
     pdulen = BLE_DEV_ADDR_LEN + adv_data_len;
 
     if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_DIRECTED) {
@@ -323,11 +356,9 @@ ble_ll_adv_legacy_pdu_make(struct ble_ll_adv_sm *advsm, struct os_mbuf *m)
         pdu_type |= BLE_ADV_PDU_HDR_TXADD_RAND;
     }
 
-    /* Get the advertising PDU and initialize it*/
-    ble_ll_mbuf_init(m, pdulen, pdu_type);
+    *hdr_byte = pdu_type;
 
     /* Construct advertisement */
-    dptr = m->om_data;
     memcpy(dptr, advsm->adva, BLE_DEV_ADDR_LEN);
     dptr += BLE_DEV_ADDR_LEN;
 
@@ -338,175 +369,75 @@ ble_ll_adv_legacy_pdu_make(struct ble_ll_adv_sm *advsm, struct os_mbuf *m)
 
     /* Copy in advertising data, if any */
     if (adv_data_len != 0) {
-        memcpy(dptr, advsm->adv_data, adv_data_len);
+        os_mbuf_copydata(advsm->adv_data, 0, adv_data_len, dptr);
     }
+
+    return pdulen;
 }
 
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
-/* TODO this shouldn't be needed
- *
- * PDU could be constructed before scheduling and held in mbuf until
- * transmission
- *
- */
-static uint8_t
-ble_ll_adv_secondary_pdu_len(struct ble_ll_adv_sm *advsm)
+static void
+ble_ll_adv_put_aux_ptr(struct ble_ll_adv_sm *advsm, uint32_t offset,
+                       uint8_t *dptr)
 {
-    uint8_t pdulen;
+    /* in usecs */
+    offset = os_cputime_ticks_to_usecs(offset);
 
-    pdulen = 2 + BLE_LL_PDU_HDR_LEN + BLE_LL_EXT_ADV_DATA_INFO_SIZE;
+    dptr[0] = advsm->adv_secondary_chan;
 
-    if (!(advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_SCANNABLE) &&
-            advsm->adv_len) {
-        pdulen += advsm->adv_len;
+    if (offset > 245700) {
+        dptr[0] |= 0x80;
+        offset = offset / 300;
+    } else {
+        offset = offset / 30;
     }
 
-    if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_INC_TX_PWR) {
-        pdulen += BLE_LL_EXT_ADV_TX_POWER_SIZE;
-    }
-
-    if ((advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_DIRECTED) ||
-            (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_CONNECTABLE)) {
-        pdulen += BLE_LL_EXT_ADV_TARGETA_SIZE;
-    }
-
-    return pdulen;
-}
-
-static uint8_t
-ble_ll_adv_aux_scan_rsp_len(struct ble_ll_adv_sm *advsm)
-{
-    uint8_t pdulen;
-
-    pdulen = 2 + BLE_LL_PDU_HDR_LEN + BLE_LL_EXT_ADV_ADVA_SIZE;
-
-    if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_INC_TX_PWR) {
-        pdulen += BLE_LL_EXT_ADV_TX_POWER_SIZE;
-    }
-
-    pdulen += advsm->scan_rsp_len;
-
-    return pdulen;
+    dptr[1] = (offset & 0x000000ff);
+    dptr[2] = ((offset >> 8) & 0x0000001f) | (advsm->sec_phy - 1) << 5; //TODO;
 }
 
 /**
  * Create the advertising PDU
  */
-static void
-ble_ll_adv_pdu_make(struct ble_ll_adv_sm *advsm, struct os_mbuf *m)
+static uint8_t
+ble_ll_adv_pdu_make(uint8_t *dptr, void *pducb_arg, uint8_t *hdr_byte)
 {
-    uint8_t *dptr;
-    uint8_t pdulen;
+    struct ble_ll_adv_sm *advsm;
     uint8_t pdu_type;
-
-    bool adva = false;
-    bool targeta = false;
-    bool adi = false;
-    bool aux_ptr = false;
-    bool tx_power = false;
-    bool adv_data = false;
     uint8_t adv_mode;
     uint8_t ext_hdr_len;
     uint8_t ext_hdr_flags;
     uint32_t offset;
 
+    advsm = pducb_arg;
+
+    assert(ble_ll_adv_active_chanset_is_pri(advsm));
     if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY) {
-        return ble_ll_adv_legacy_pdu_make(advsm, m);
+        return ble_ll_adv_legacy_pdu_make(dptr, advsm, hdr_byte);
     }
 
-    pdulen = 1; /* ext hdr len + AdvMode */
-
-    ext_hdr_len = 0;
-
-    /* TODO for now always add flags */
-    ext_hdr_len += 1;
-    ext_hdr_flags = 0;
-
-
-    if (ble_ll_adv_active_chanset_is_sec(advsm)) {
-        pdu_type = BLE_ADV_PDU_TYPE_AUX_ADV_IND;
-
-        adi = true;
-        adva = true;
-
-        if (!(advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_SCANNABLE) &&
-                advsm->adv_len) {
-            adv_data = true;
-        }
-
-        if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_INC_TX_PWR) {
-            tx_power = true;
-        }
-
-        if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_DIRECTED) {
-            targeta = true;
-        }
-
-    } else {
-        assert(ble_ll_adv_active_chanset_is_pri(advsm));
-
-        /* only ADV_EXT_IND goes on primary advertising channels */
-        pdu_type = BLE_ADV_PDU_TYPE_ADV_EXT_IND;
-
-        /* TODO in some cases we could avoid auxiliary packet */
-        aux_ptr = true;
-        adi = true;
-    }
-
-    adv_mode = 0;
-    if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_CONNECTABLE) {
-        adv_mode |= BLE_LL_EXT_ADV_MODE_CONN;
-    }
-
-    if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_SCANNABLE) {
-            adv_mode |= BLE_LL_EXT_ADV_MODE_SCAN;
-    }
-
-    if (adva) {
-        ext_hdr_flags |= (1 << BLE_LL_EXT_ADV_ADVA_BIT);
-        ext_hdr_len += BLE_LL_EXT_ADV_ADVA_SIZE;
-    }
-
-    if (targeta) {
-        ext_hdr_flags |= (1 << BLE_LL_EXT_ADV_TARGETA_BIT);
-        ext_hdr_len += BLE_LL_EXT_ADV_TARGETA_SIZE;
-    }
-
-    if (adi) {
-        ext_hdr_flags |= (1 << BLE_LL_EXT_ADV_DATA_INFO_BIT);
-        ext_hdr_len += BLE_LL_EXT_ADV_DATA_INFO_SIZE;
-    }
-
-    if (aux_ptr) {
-        ext_hdr_flags |= (1 << BLE_LL_EXT_ADV_AUX_PTR_BIT);
-        ext_hdr_len += BLE_LL_EXT_ADV_AUX_PTR_SIZE;
-    }
-
-    if (tx_power) {
-        ext_hdr_flags |= (1 << BLE_LL_EXT_ADV_TX_POWER_BIT);
-        ext_hdr_len += BLE_LL_EXT_ADV_TX_POWER_SIZE;
-    }
-
-    /* TODO ACAD */
-
-    if (adv_data) {
-        pdulen += advsm->adv_len;
-    }
+    /* only ADV_EXT_IND goes on primary advertising channels */
+    pdu_type = BLE_ADV_PDU_TYPE_ADV_EXT_IND;
 
     /* Set TxAdd to random if needed. */
     if (advsm->flags & BLE_LL_ADV_SM_FLAG_TX_ADD) {
         pdu_type |= BLE_ADV_PDU_HDR_TXADD_RAND;
     }
 
-    pdulen += ext_hdr_len;
+    *hdr_byte = pdu_type;
 
-    /* Set the PDU length in the state machine (includes header) */
-    advsm->adv_pdu_len = pdulen + BLE_LL_PDU_HDR_LEN;
+    adv_mode = 0;
+    if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_CONNECTABLE) {
+        adv_mode |= BLE_LL_EXT_ADV_MODE_CONN;
+    }
+    if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_SCANNABLE) {
+        adv_mode |= BLE_LL_EXT_ADV_MODE_SCAN;
+    }
 
-    ble_ll_mbuf_init(m, pdulen, pdu_type);
-
-    /* Construct advertisement */
-    dptr = m->om_data;
+    ext_hdr_len = BLE_LL_EXT_ADV_FLAGS_SIZE + BLE_LL_EXT_ADV_DATA_INFO_SIZE +
+                  BLE_LL_EXT_ADV_AUX_PTR_SIZE;
+    ext_hdr_flags = (1 << BLE_LL_EXT_ADV_DATA_INFO_BIT) |
+                    (1 << BLE_LL_EXT_ADV_AUX_PTR_BIT);
 
     /* ext hdr len and adv mode */
     dptr[0] = ext_hdr_len | (adv_mode << 6);
@@ -516,73 +447,190 @@ ble_ll_adv_pdu_make(struct ble_ll_adv_sm *advsm, struct os_mbuf *m)
     dptr[0] = ext_hdr_flags;
     dptr += 1;
 
-    if (adva) {
+    /* ADI */
+    dptr[0] = advsm->adi & 0x00ff;
+    dptr[1] = advsm->adi >> 8;
+    dptr += BLE_LL_EXT_ADV_DATA_INFO_SIZE;
+
+    /* AuxPtr */
+    assert(AUX_CURRENT(advsm)->sch.enqueued);
+    offset = AUX_CURRENT(advsm)->start_time - advsm->adv_pdu_start_time;
+    ble_ll_adv_put_aux_ptr(advsm, offset, dptr);
+
+    return BLE_LL_EXT_ADV_HDR_LEN + ext_hdr_len;
+}
+
+/**
+ * Create the AUX PDU
+ */
+static uint8_t
+ble_ll_adv_aux_pdu_make(uint8_t *dptr, void *pducb_arg, uint8_t *hdr_byte)
+{
+    struct ble_ll_adv_sm *advsm;
+    struct ble_ll_adv_aux *aux;
+    uint8_t adv_mode;
+    uint8_t pdu_type;
+    uint8_t ext_hdr_len;
+    uint32_t offset;
+
+    advsm = pducb_arg;
+    aux = AUX_CURRENT(advsm);
+
+    assert(!(advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY));
+    assert(ble_ll_adv_active_chanset_is_sec(advsm));
+
+    /* It's the same for AUX_ADV_IND and AUX_CHAIN_IND */
+    pdu_type = BLE_ADV_PDU_TYPE_AUX_ADV_IND;
+
+    /* Set TxAdd to random if needed. */
+    if (advsm->flags & BLE_LL_ADV_SM_FLAG_TX_ADD) {
+        pdu_type |= BLE_ADV_PDU_HDR_TXADD_RAND;
+    }
+
+    *hdr_byte = pdu_type;
+
+    /* We do not create scannable PDUs here - this is handled separately */
+    adv_mode = 0;
+    if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_CONNECTABLE) {
+        adv_mode |= BLE_LL_EXT_ADV_MODE_CONN;
+    }
+
+    ext_hdr_len = aux->payload_len - BLE_LL_EXT_ADV_HDR_LEN - aux->aux_data_len;
+    dptr[0] = (adv_mode << 6) | ext_hdr_len;
+    dptr += 1;
+
+    dptr[0] = aux->ext_hdr;
+    dptr += 1;
+
+    if (aux->ext_hdr & (1 << BLE_LL_EXT_ADV_ADVA_BIT)) {
         memcpy(dptr, advsm->adva, BLE_LL_EXT_ADV_ADVA_SIZE);
         dptr += BLE_LL_EXT_ADV_ADVA_SIZE;
     }
 
-    if (targeta) {
+    if (aux->ext_hdr & (1 << BLE_LL_EXT_ADV_TARGETA_BIT)) {
         memcpy(dptr, advsm->initiator_addr, BLE_LL_EXT_ADV_TARGETA_SIZE);
         dptr += BLE_LL_EXT_ADV_TARGETA_SIZE;
     }
 
-    if (adi) {
+    if (aux->ext_hdr & (1 << BLE_LL_EXT_ADV_DATA_INFO_BIT)) {
         dptr[0] = advsm->adi & 0x00ff;
         dptr[1] = advsm->adi >> 8;
         dptr += BLE_LL_EXT_ADV_DATA_INFO_SIZE;
     }
 
-    if (aux_ptr) {
-        offset = advsm->adv_secondary_start_time - advsm->adv_pdu_start_time;
+    if (aux->ext_hdr & (1 << BLE_LL_EXT_ADV_AUX_PTR_BIT)) {
+        assert(AUX_NEXT(advsm)->sch.enqueued);
 
-        /* in usecs */
-        offset = os_cputime_ticks_to_usecs(offset);
-
-        dptr[0] = advsm->adv_secondary_chan;
-
-        if (offset > 245700) {
-            dptr[0] |= 0x80;
-            offset = offset / 300;
+        if (advsm->rx_ble_hdr) {
+            offset = advsm->rx_ble_hdr->rem_usecs +
+                     ble_ll_pdu_tx_time_get(12, advsm->sec_phy) + BLE_LL_IFS + 30;
+            offset = AUX_NEXT(advsm)->start_time - advsm->rx_ble_hdr->beg_cputime -
+                     os_cputime_usecs_to_ticks(offset);
         } else {
-            offset = offset / 30;
+            offset = AUX_NEXT(advsm)->start_time - aux->start_time;
         }
 
-        dptr[1] = (offset & 0x000000ff);
-        dptr[2] = ((offset >> 8) & 0x0000001f) | (advsm->sec_phy - 1) << 5; //TODO;
+        ble_ll_adv_put_aux_ptr(advsm, offset, dptr);
 
         dptr += BLE_LL_EXT_ADV_AUX_PTR_SIZE;
     }
 
-    if (tx_power) {
+    if (aux->ext_hdr & (1 << BLE_LL_EXT_ADV_TX_POWER_BIT)) {
         dptr[0] = advsm->adv_txpwr;
         dptr += BLE_LL_EXT_ADV_TX_POWER_SIZE;
     }
 
-    if (adv_data) {
-        memcpy(dptr, advsm->adv_data, advsm->adv_len);
-        dptr += advsm->adv_len;
+    if (aux->aux_data_len) {
+        os_mbuf_copydata(*advsm->aux_data, aux->aux_data_offset,
+                         aux->aux_data_len, dptr);
     }
+
+    return aux->payload_len;
+}
+
+static uint8_t
+ble_ll_adv_aux_scannable_pdu_make(uint8_t *dptr, void *pducb_arg, uint8_t *hdr_byte)
+{
+    struct ble_ll_adv_sm *advsm;
+    uint8_t pdu_type;
+    uint8_t *ext_hdr_len;
+    uint8_t *ext_hdr;
+    uint8_t pdulen;
+
+    advsm = pducb_arg;
+
+    assert(!(advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY));
+    assert(advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_SCANNABLE);
+    assert(advsm->aux_first_pdu);
+    assert(ble_ll_adv_active_chanset_is_sec(advsm));
+
+    pdu_type = BLE_ADV_PDU_TYPE_AUX_ADV_IND;
+
+    /* Set TxAdd to random if needed. */
+    if (advsm->flags & BLE_LL_ADV_SM_FLAG_TX_ADD) {
+        pdu_type |= BLE_ADV_PDU_HDR_TXADD_RAND;
+    }
+
+    *hdr_byte = pdu_type;
+
+    ext_hdr_len = &dptr[0];
+    ext_hdr = &dptr[1];
+    dptr += 2;
+
+    /* Flags always */
+    *ext_hdr_len = BLE_LL_EXT_ADV_FLAGS_SIZE;
+    *ext_hdr = 0;
+
+    /* AdvA always */
+    *ext_hdr_len += BLE_LL_EXT_ADV_ADVA_SIZE;
+    *ext_hdr |= (1 << BLE_LL_EXT_ADV_ADVA_BIT);
+    memcpy(dptr, advsm->adva, BLE_LL_EXT_ADV_ADVA_SIZE);
+    dptr += BLE_LL_EXT_ADV_ADVA_SIZE;
+
+    /* TargetA only for directed */
+    if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_DIRECTED) {
+        *ext_hdr_len += BLE_LL_EXT_ADV_TARGETA_SIZE;
+        *ext_hdr |= (1 << BLE_LL_EXT_ADV_TARGETA_BIT);
+        memcpy(dptr, advsm->initiator_addr, BLE_LL_EXT_ADV_TARGETA_SIZE);
+        dptr += BLE_LL_EXT_ADV_TARGETA_SIZE;
+    }
+
+    /* ADI always */
+    *ext_hdr_len += BLE_LL_EXT_ADV_DATA_INFO_SIZE;
+    *ext_hdr |= (1 << BLE_LL_EXT_ADV_DATA_INFO_BIT);
+    dptr[0] = advsm->adi & 0x00ff;
+    dptr[1] = advsm->adi >> 8;
+    dptr += BLE_LL_EXT_ADV_DATA_INFO_SIZE;
+
+    /* TxPower if configured */
+    if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_INC_TX_PWR) {
+        *ext_hdr_len += BLE_LL_EXT_ADV_TX_POWER_SIZE;
+        *ext_hdr |= (1 << BLE_LL_EXT_ADV_TX_POWER_BIT);
+        dptr[0] = advsm->adv_txpwr;
+        dptr += BLE_LL_EXT_ADV_TX_POWER_SIZE;
+    }
+
+    pdulen = BLE_LL_EXT_ADV_HDR_LEN + *ext_hdr_len;
+
+    *ext_hdr_len |= (BLE_LL_EXT_ADV_MODE_SCAN << 6);
+
+    return pdulen;
 }
 #endif
 
-static struct os_mbuf *
-ble_ll_adv_scan_rsp_legacy_pdu_make(struct ble_ll_adv_sm *advsm)
+static uint8_t
+ble_ll_adv_scan_rsp_legacy_pdu_make(uint8_t *dptr, void *pducb_arg,
+                                    uint8_t *hdr_byte)
 {
+    struct ble_ll_adv_sm *advsm;
     uint8_t     scan_rsp_len;
-    uint8_t     *dptr;
     uint8_t     pdulen;
     uint8_t     hdr;
-    struct os_mbuf *m;
 
-    /* Obtain scan response buffer */
-    m = os_msys_get_pkthdr(BLE_SCAN_RSP_LEGACY_DATA_MAX_LEN + BLE_DEV_ADDR_LEN,
-                           sizeof(struct ble_mbuf_hdr));
-    if (!m) {
-        return NULL;
-    }
+    advsm = pducb_arg;
 
     /* Make sure that the length is valid */
-    scan_rsp_len = advsm->scan_rsp_len;
+    scan_rsp_len = SCAN_RSP_DATA_LEN(advsm);
     assert(scan_rsp_len <= BLE_SCAN_RSP_LEGACY_DATA_MAX_LEN);
 
     /* Set BLE transmit header */
@@ -592,7 +640,7 @@ ble_ll_adv_scan_rsp_legacy_pdu_make(struct ble_ll_adv_sm *advsm)
         hdr |= BLE_ADV_PDU_HDR_TXADD_RAND;
     }
 
-    ble_ll_mbuf_init(m, pdulen, hdr);
+    *hdr_byte = hdr;
 
     /*
      * The adva in this packet will be the same one that was being advertised
@@ -603,13 +651,13 @@ ble_ll_adv_scan_rsp_legacy_pdu_make(struct ble_ll_adv_sm *advsm)
      */
 
     /* Construct scan response */
-    dptr = m->om_data;
     memcpy(dptr, advsm->adva, BLE_DEV_ADDR_LEN);
     if (scan_rsp_len != 0) {
-        memcpy(dptr + BLE_DEV_ADDR_LEN, advsm->scan_rsp_data, scan_rsp_len);
+        os_mbuf_copydata(advsm->scan_rsp_data, 0, scan_rsp_len,
+                         dptr + BLE_DEV_ADDR_LEN);
     }
 
-    return m;
+    return pdulen;
 }
 
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
@@ -618,122 +666,58 @@ ble_ll_adv_scan_rsp_legacy_pdu_make(struct ble_ll_adv_sm *advsm)
  *
  * @param advsm
  */
-static struct os_mbuf *
-ble_ll_adv_scan_rsp_pdu_make(struct ble_ll_adv_sm *advsm)
+static uint8_t
+ble_ll_adv_scan_rsp_pdu_make(uint8_t *dptr, void *pducb_arg, uint8_t *hdr_byte)
 {
-    uint8_t     *dptr;
-    uint8_t     pdulen;
-    uint8_t     ext_hdr_len;
-    uint8_t     ext_hdr_flags;
-    uint8_t     hdr;
-    struct os_mbuf *m;
+    struct ble_ll_adv_sm *advsm;
+
+    advsm = pducb_arg;
 
     if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY) {
-        return ble_ll_adv_scan_rsp_legacy_pdu_make(advsm);
+        return ble_ll_adv_scan_rsp_legacy_pdu_make(dptr, pducb_arg, hdr_byte);
     }
 
-    /* ext hdr len + SCAN_RSP */
-    pdulen = 1 + advsm->scan_rsp_len;
-
-    /* flags, adva and optional TX power */
-    ext_hdr_len = 1 + BLE_LL_EXT_ADV_ADVA_SIZE;
-    ext_hdr_flags = (1 << BLE_LL_EXT_ADV_ADVA_BIT);
-
-    if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_INC_TX_PWR) {
-        ext_hdr_len += BLE_LL_EXT_ADV_TX_POWER_SIZE;
-        ext_hdr_len += BLE_LL_EXT_ADV_TX_POWER_SIZE;
-    }
-
-    pdulen += ext_hdr_len;
-
-    /* Obtain scan response buffer */
-    m = os_msys_get_pkthdr(pdulen, sizeof(struct ble_mbuf_hdr));
-    if (!m) {
-        return NULL;
-    }
-
-    /* Set BLE transmit header */
-    hdr = BLE_ADV_PDU_TYPE_AUX_SCAN_RSP;
-    if (advsm->flags & BLE_LL_ADV_SM_FLAG_TX_ADD) {
-        hdr |= BLE_ADV_PDU_HDR_TXADD_RAND;
-    }
-
-    ble_ll_mbuf_init(m, pdulen, hdr);
-
-    /* Construct scan response */
-    dptr = m->om_data;
-
-    /* ext hdr len and adv mode (00b) */
-    dptr[0] = ext_hdr_len;
-    dptr += 1;
-
-    /* ext hdr flags */
-    dptr[0] = ext_hdr_flags;
-    dptr += 1;
-
-    /*
-     * The adva in this packet will be the same one that was being advertised
-     * and is based on the peer identity address in the set advertising
-     * parameters. If a different peer sends us a scan request (for some reason)
-     * we will reply with an adva that was not generated based on the local irk
-     * of the peer sending the scan request.
-     */
-    memcpy(dptr, advsm->adva, BLE_LL_EXT_ADV_ADVA_SIZE);
-    dptr += BLE_LL_EXT_ADV_ADVA_SIZE;
-
-    if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_INC_TX_PWR) {
-        dptr[0] = advsm->adv_txpwr;
-        dptr += BLE_LL_EXT_ADV_TX_POWER_SIZE;
-    }
-
-    memcpy(dptr, advsm->scan_rsp_data, advsm->scan_rsp_len);
-    dptr += advsm->scan_rsp_len;
-
-    return m;
+    return ble_ll_adv_aux_pdu_make(dptr, pducb_arg, hdr_byte);
 }
+
+struct aux_conn_rsp_data {
+    struct ble_ll_adv_sm *advsm;
+    uint8_t *peer;
+    uint8_t rxadd;
+};
 
 /**
  * Create a AUX connect response PDU
  *
  * @param advsm
  */
-static struct os_mbuf *
-ble_ll_adv_aux_conn_rsp_pdu_make(struct ble_ll_adv_sm *advsm, uint8_t *peer,
-                                 uint8_t rxadd)
+static uint8_t
+ble_ll_adv_aux_conn_rsp_pdu_make(uint8_t *dptr, void *pducb_arg,
+                                 uint8_t *hdr_byte)
 {
-    uint8_t     *dptr;
+    struct aux_conn_rsp_data *rsp_data;
     uint8_t     pdulen;
     uint8_t     ext_hdr_len;
     uint8_t     ext_hdr_flags;
     uint8_t     hdr;
-    struct os_mbuf *m;
 
-    /* ext hdr len */
-    pdulen = 1;
+    rsp_data = pducb_arg;
 
     /* flags,AdvA and TargetA */
-    ext_hdr_len = 1 + BLE_LL_EXT_ADV_ADVA_SIZE + BLE_LL_EXT_ADV_TARGETA_SIZE;
+    ext_hdr_len = BLE_LL_EXT_ADV_FLAGS_SIZE + BLE_LL_EXT_ADV_ADVA_SIZE +
+                  BLE_LL_EXT_ADV_TARGETA_SIZE;
     ext_hdr_flags = (1 << BLE_LL_EXT_ADV_ADVA_BIT);
     ext_hdr_flags |= (1 << BLE_LL_EXT_ADV_TARGETA_BIT);
 
-    pdulen += ext_hdr_len;
-
-    /* Obtain scan response buffer */
-    m = os_msys_get_pkthdr(pdulen, sizeof(struct ble_mbuf_hdr));
-    if (!m) {
-        return NULL;
-    }
+    pdulen = BLE_LL_EXT_ADV_HDR_LEN + ext_hdr_len;
 
     /* Set BLE transmit header */
-    hdr = BLE_ADV_PDU_TYPE_AUX_CONNECT_RSP | rxadd;
-    if (advsm->flags & BLE_LL_ADV_SM_FLAG_TX_ADD) {
+    hdr = BLE_ADV_PDU_TYPE_AUX_CONNECT_RSP | rsp_data->rxadd;
+    if (rsp_data->advsm->flags & BLE_LL_ADV_SM_FLAG_TX_ADD) {
         hdr |= BLE_ADV_PDU_HDR_TXADD_MASK;
     }
 
-    ble_ll_mbuf_init(m, pdulen, hdr);
-
-    /* Construct connect response */
-    dptr = m->om_data;
+    *hdr_byte = hdr;
 
     /* ext hdr len and adv mode (00b) */
     dptr[0] = ext_hdr_len;
@@ -743,13 +727,13 @@ ble_ll_adv_aux_conn_rsp_pdu_make(struct ble_ll_adv_sm *advsm, uint8_t *peer,
     dptr[0] = ext_hdr_flags;
     dptr += 1;
 
-    memcpy(dptr, advsm->adva, BLE_LL_EXT_ADV_ADVA_SIZE);
+    memcpy(dptr, rsp_data->advsm->adva, BLE_LL_EXT_ADV_ADVA_SIZE);
     dptr += BLE_LL_EXT_ADV_ADVA_SIZE;
 
-    memcpy(dptr, peer, BLE_LL_EXT_ADV_TARGETA_SIZE);
+    memcpy(dptr, rsp_data->peer, BLE_LL_EXT_ADV_TARGETA_SIZE);
     dptr += BLE_LL_EXT_ADV_ADVA_SIZE;
 
-    return m;
+    return pdulen;
 }
 #endif
 
@@ -827,7 +811,6 @@ ble_ll_adv_tx_start_cb(struct ble_ll_sched_item *sch)
     uint8_t end_trans;
     uint32_t txstart;
     struct ble_ll_adv_sm *advsm;
-    struct os_mbuf *adv_pdu;
 
     /* Get the state machine for the event */
     advsm = (struct ble_ll_adv_sm *)sch->cb_arg;
@@ -890,23 +873,12 @@ ble_ll_adv_tx_start_cb(struct ble_ll_sched_item *sch)
         ble_phy_set_txend_cb(ble_ll_adv_tx_done, advsm);
     }
 
-    /* Get an advertising mbuf (packet header)  */
-    adv_pdu = os_msys_get_pkthdr(BLE_ADV_LEGACY_MAX_PKT_LEN,
-                                 sizeof(struct ble_mbuf_hdr));
-    if (!adv_pdu) {
-        ble_phy_disable();
-        goto adv_tx_done;
-    }
-
-#if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
-    ble_ll_adv_pdu_make(advsm, adv_pdu);
-#else
-    ble_ll_adv_legacy_pdu_make(advsm, adv_pdu);
-#endif
-
     /* Transmit advertisement */
-    rc = ble_phy_tx(adv_pdu, end_trans);
-    os_mbuf_free_chain(adv_pdu);
+#if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
+    rc = ble_phy_tx(ble_ll_adv_pdu_make, advsm, end_trans);
+#else
+    rc = ble_phy_tx(ble_ll_adv_legacy_pdu_make, advsm, end_trans);
+#endif
     if (rc) {
         goto adv_tx_done;
     }
@@ -983,7 +955,7 @@ ble_ll_adv_secondary_tx_start_cb(struct ble_ll_sched_item *sch)
     uint8_t end_trans;
     uint32_t txstart;
     struct ble_ll_adv_sm *advsm;
-    struct os_mbuf *adv_pdu;
+    ble_phy_tx_pducb_t pducb;
 
     /* Get the state machine for the event */
     advsm = (struct ble_ll_adv_sm *)sch->cb_arg;
@@ -1028,28 +1000,23 @@ ble_ll_adv_secondary_tx_start_cb(struct ble_ll_sched_item *sch)
 #endif
 
     /* Set phy mode based on type of advertisement */
-    if ((advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_CONNECTABLE) ||
-        (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_SCANNABLE)) {
+    if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_CONNECTABLE) {
         end_trans = BLE_PHY_TRANSITION_TX_RX;
         ble_phy_set_txend_cb(NULL, NULL);
+        pducb = ble_ll_adv_aux_pdu_make;
+    } else if ((advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_SCANNABLE) &&
+               advsm->aux_first_pdu) {
+        end_trans = BLE_PHY_TRANSITION_TX_RX;
+        ble_phy_set_txend_cb(NULL, NULL);
+        pducb = ble_ll_adv_aux_scannable_pdu_make;
     } else {
         end_trans = BLE_PHY_TRANSITION_NONE;
         ble_phy_set_txend_cb(ble_ll_adv_tx_done, advsm);
+        pducb = ble_ll_adv_aux_pdu_make;
     }
-
-    /* Get an advertising mbuf (packet header)  */
-    adv_pdu = os_msys_get_pkthdr(BLE_ADV_LEGACY_MAX_PKT_LEN,
-                                 sizeof(struct ble_mbuf_hdr));
-    if (!adv_pdu) {
-        ble_phy_disable();
-        goto adv_tx_done;
-    }
-
-    ble_ll_adv_pdu_make(advsm, adv_pdu);
 
     /* Transmit advertisement */
-    rc = ble_phy_tx(adv_pdu, end_trans);
-    os_mbuf_free_chain(adv_pdu);
+    rc = ble_phy_tx(pducb, advsm, end_trans);
     if (rc) {
         goto adv_tx_done;
     }
@@ -1074,16 +1041,164 @@ adv_tx_done:
     return BLE_LL_SCHED_STATE_DONE;
 }
 
-static void
-ble_ll_adv_secondary_set_sched(struct ble_ll_adv_sm *advsm)
+static uint8_t
+ble_ll_adv_aux_scannable_pdu_payload_len(struct ble_ll_adv_sm *advsm)
 {
-    uint32_t max_usecs;
-    struct ble_ll_sched_item *sch;
+    uint8_t len;
 
-    sch = &advsm->adv_secondary_sch;
-    sch->cb_arg = advsm;
-    sch->sched_cb = ble_ll_adv_secondary_tx_start_cb;
-    sch->sched_type = BLE_LL_SCHED_TYPE_ADV;
+    /* Flags, AdvA and ADI always */
+    len = BLE_LL_EXT_ADV_HDR_LEN + BLE_LL_EXT_ADV_FLAGS_SIZE +
+          BLE_LL_EXT_ADV_ADVA_SIZE + BLE_LL_EXT_ADV_DATA_INFO_SIZE;
+
+    /* TargetA only for directed */
+    if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_DIRECTED) {
+        len += BLE_LL_EXT_ADV_TARGETA_SIZE;
+    }
+
+    /* TxPower if configured */
+    if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_INC_TX_PWR) {
+        len += BLE_LL_EXT_ADV_TX_POWER_SIZE;
+    }
+
+    return len;
+}
+
+static void
+ble_ll_adv_aux_calculate(struct ble_ll_adv_sm *advsm,
+                         struct ble_ll_adv_aux *aux, uint16_t aux_data_offset)
+{
+    uint16_t rem_aux_data_len;
+    uint8_t hdr_len;
+    bool chainable;
+
+    assert(!aux->sch.enqueued);
+    assert((AUX_DATA_LEN(advsm) > aux_data_offset) ||
+           (AUX_DATA_LEN(advsm) == 0 && aux_data_offset == 0));
+
+    aux->aux_data_offset = aux_data_offset;
+    aux->aux_data_len = 0;
+    aux->payload_len = 0;
+
+    rem_aux_data_len = AUX_DATA_LEN(advsm) - aux_data_offset;
+    chainable = !(advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_CONNECTABLE);
+
+    /* Flags and ADI */
+    aux->ext_hdr = (1 << BLE_LL_EXT_ADV_DATA_INFO_BIT);
+    hdr_len = BLE_LL_EXT_ADV_HDR_LEN + BLE_LL_EXT_ADV_FLAGS_SIZE +
+              BLE_LL_EXT_ADV_DATA_INFO_SIZE;
+
+    /* AdvA for 1st PDU in chain (i.e. AUX_ADV_IND or AUX_SCAN_RSP) */
+    if (aux_data_offset == 0) {
+        aux->ext_hdr |= (1 << BLE_LL_EXT_ADV_ADVA_BIT);
+        hdr_len += BLE_LL_EXT_ADV_ADVA_SIZE;
+    }
+
+    /* TargetA for directed connectable */
+    if ((advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_DIRECTED) &&
+        (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_CONNECTABLE)) {
+        aux->ext_hdr |= (1 << BLE_LL_EXT_ADV_TARGETA_BIT);
+        hdr_len += BLE_LL_EXT_ADV_TARGETA_SIZE;
+    }
+
+    /* TxPower if configured */
+    if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_INC_TX_PWR) {
+        aux->ext_hdr |= (1 << BLE_LL_EXT_ADV_TX_POWER_BIT);
+        hdr_len += BLE_LL_EXT_ADV_TX_POWER_SIZE;
+    }
+
+    /* AdvData always */
+    aux->aux_data_len = min(BLE_LL_MAX_PAYLOAD_LEN - hdr_len, rem_aux_data_len);
+
+    /* AuxPtr if there are more AdvData remaining that we can fit here */
+    if (chainable && (rem_aux_data_len > aux->aux_data_len)) {
+            aux->ext_hdr |= (1 << BLE_LL_EXT_ADV_AUX_PTR_BIT);
+            hdr_len += BLE_LL_EXT_ADV_AUX_PTR_SIZE;
+            aux->aux_data_len -= BLE_LL_EXT_ADV_AUX_PTR_SIZE;
+
+            /* PDU payload should be full if chained */
+            assert(hdr_len + aux->aux_data_len == BLE_LL_MAX_PAYLOAD_LEN);
+    }
+
+    aux->payload_len = hdr_len + aux->aux_data_len;
+}
+
+static void
+ble_ll_adv_aux_scheduled(struct ble_ll_adv_sm *advsm, uint32_t sch_start,
+                         void *arg)
+{
+    struct ble_ll_adv_aux *aux = arg;
+
+    aux->start_time = sch_start + g_ble_ll_sched_offset_ticks;
+}
+
+static void
+ble_ll_adv_aux_schedule_next(struct ble_ll_adv_sm *advsm)
+{
+    struct ble_ll_adv_aux *aux;
+    struct ble_ll_adv_aux *aux_next;
+    struct ble_ll_sched_item *sch;
+    uint16_t rem_aux_data_len;
+    uint16_t next_aux_data_offset;
+    uint32_t max_usecs;
+
+    assert(advsm->aux_active);
+
+    aux = AUX_CURRENT(advsm);
+    aux_next = AUX_NEXT(advsm);
+
+    assert(aux->sch.enqueued);
+    assert(!aux_next->sch.enqueued);
+
+    /*
+     * In general we do not schedule next aux if current aux does not have
+     * AuxPtr in extended header as this means we do not need subsequent
+     * ADV_CHAIN_IND to be sent.
+     * However, if current aux is scannable we allow to schedule next aux as
+     * this will be 1st ADV_CHAIN_IND of scan response.
+     */
+    if (!(aux->ext_hdr & (1 << BLE_LL_EXT_ADV_AUX_PTR_BIT))) {
+        return;
+    }
+
+    next_aux_data_offset = aux->aux_data_offset + aux->aux_data_len;
+
+    assert(AUX_DATA_LEN(advsm) >= next_aux_data_offset);
+
+    rem_aux_data_len = AUX_DATA_LEN(advsm) - next_aux_data_offset;
+    assert(rem_aux_data_len > 0);
+
+    ble_ll_adv_aux_calculate(advsm, aux_next, next_aux_data_offset);
+    max_usecs = ble_ll_pdu_tx_time_get(aux_next->payload_len, advsm->sec_phy);
+    max_usecs += XCVR_PROC_DELAY_USECS;
+
+    aux_next->start_time = aux->sch.end_time +
+                          ble_ll_usecs_to_ticks_round_up(BLE_LL_MAFS);
+
+    sch = &aux_next->sch;
+    sch->start_time = aux_next->start_time - g_ble_ll_sched_offset_ticks;
+    sch->remainder = 0;
+    sch->end_time = aux_next->start_time + os_cputime_usecs_to_ticks(max_usecs);
+    ble_ll_sched_adv_new(&aux_next->sch, ble_ll_adv_aux_scheduled, aux_next);
+}
+
+static void
+ble_ll_adv_aux_schedule_first(struct ble_ll_adv_sm *advsm)
+{
+    struct ble_ll_adv_aux *aux;
+    struct ble_ll_sched_item *sch;
+    uint32_t max_usecs;
+
+    assert(!advsm->aux_active);
+    assert(!advsm->aux[0].sch.enqueued);
+    assert(!advsm->aux[1].sch.enqueued);
+
+    advsm->aux_active = 1;
+    advsm->aux_index = 0;
+    advsm->aux_first_pdu = 1;
+    advsm->aux_not_scanned = 0;
+
+    aux = AUX_CURRENT(advsm);
+    ble_ll_adv_aux_calculate(advsm, aux, 0);
 
     /* TODO we could use CSA2 for this
      * (will be needed for periodic advertising anyway)
@@ -1091,24 +1206,26 @@ ble_ll_adv_secondary_set_sched(struct ble_ll_adv_sm *advsm)
     advsm->adv_secondary_chan = rand() % BLE_PHY_NUM_DATA_CHANS;
 
     /* Set end time to maximum time this schedule item may take */
-    max_usecs = ble_ll_pdu_tx_time_get(ble_ll_adv_secondary_pdu_len(advsm),
-                                       advsm->sec_phy);
-
     if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_CONNECTABLE) {
-        max_usecs += BLE_LL_IFS +
-                     /* AUX_CONN_REQ */
-                     ble_ll_pdu_tx_time_get(34 + 14, advsm->sec_phy)  +
-                     BLE_LL_IFS +
-                     /* AUX_CONN_RSP */
-                     ble_ll_pdu_tx_time_get(14, advsm->sec_phy);
+        max_usecs = ble_ll_pdu_tx_time_get(aux->payload_len, advsm->sec_phy) +
+                    BLE_LL_IFS +
+                    /* AUX_CONN_REQ */
+                    ble_ll_pdu_tx_time_get(34 + 14, advsm->sec_phy)  +
+                    BLE_LL_IFS +
+                    /* AUX_CONN_RSP */
+                    ble_ll_pdu_tx_time_get(14, advsm->sec_phy);
     } else if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_SCANNABLE) {
-        max_usecs += BLE_LL_IFS +
-                     /* AUX_SCAN_REQ */
-                     ble_ll_pdu_tx_time_get(12, advsm->sec_phy)  +
-                     BLE_LL_IFS +
-                     /* AUX_SCAN_RSP */
-                     ble_ll_pdu_tx_time_get(ble_ll_adv_aux_scan_rsp_len(advsm),
-                                            advsm->sec_phy);
+        /* Scheduled aux is calculated for AUX_SCAN_RSP, 1st aux is created separately */
+        max_usecs = ble_ll_pdu_tx_time_get(ble_ll_adv_aux_scannable_pdu_payload_len(advsm),
+                                           advsm->sec_phy) +
+                    BLE_LL_IFS +
+                    /* AUX_SCAN_REQ */
+                    ble_ll_pdu_tx_time_get(12, advsm->sec_phy)  +
+                    BLE_LL_IFS +
+                    /* AUX_SCAN_RSP */
+                    ble_ll_pdu_tx_time_get(aux->payload_len, advsm->sec_phy);
+    } else {
+        max_usecs = ble_ll_pdu_tx_time_get(aux->payload_len, advsm->sec_phy);
     }
 
     /*
@@ -1117,10 +1234,73 @@ ble_ll_adv_secondary_set_sched(struct ble_ll_adv_sm *advsm)
      */
     max_usecs += XCVR_PROC_DELAY_USECS;
 
-    sch->start_time = advsm->adv_secondary_start_time - g_ble_ll_sched_offset_ticks;
+    sch = &aux->sch;
+    sch->start_time = aux->start_time - g_ble_ll_sched_offset_ticks;
     sch->remainder = 0;
-    sch->end_time = advsm->adv_secondary_start_time +
-        os_cputime_usecs_to_ticks(max_usecs);
+    sch->end_time = aux->start_time + os_cputime_usecs_to_ticks(max_usecs);
+    ble_ll_sched_adv_new(sch, ble_ll_adv_aux_scheduled, aux);
+
+}
+
+static void
+ble_ll_adv_aux_set_start_time(struct ble_ll_adv_sm *advsm)
+{
+    static const uint8_t bits[8] = {0, 1, 1, 2, 1, 2, 2, 3};
+    struct ble_ll_sched_item *sched = &advsm->adv_sch;
+    uint32_t adv_pdu_dur;
+    uint32_t adv_event_dur;
+    uint8_t chans;
+
+    assert(!advsm->aux_active);
+    assert(!advsm->aux[0].sch.enqueued);
+    assert(!advsm->aux[1].sch.enqueued);
+
+    assert(advsm->adv_chanmask > 0 &&
+           advsm->adv_chanmask <= BLE_HCI_ADV_CHANMASK_DEF);
+
+    chans = bits[advsm->adv_chanmask];
+
+    /*
+     * We want to schedule auxiliary packet as soon as possible after the end
+     * of advertising event, but no sooner than T_MAFS. The interval between
+     * advertising packets is 250 usecs (8.19 ticks) on LE Coded and a bit less
+     * on 1M, but it can vary a bit due to scheduling which we can't really
+     * control. Since we round ticks up for both interval and T_MAFS, we still
+     * have some margin here. The worst thing that can happen is that we skip
+     * last advertising packet which is not a bit problem so leave it as-is, no
+     * need to make code more complicated.
+     */
+
+    /*
+     * XXX: this could be improved if phy has TX-TX transition with controlled
+     *      or predefined interval, but since it makes advertising code even
+     *      more complicated let's skip it for now...
+     */
+
+    adv_pdu_dur = (int32_t)(sched->end_time - sched->start_time) -
+                  g_ble_ll_sched_offset_ticks;
+
+    /* 9 is 8.19 ticks rounded up - see comment above */
+    adv_event_dur = (adv_pdu_dur * chans) + (9 * (chans - 1));
+
+    advsm->aux[0].start_time = advsm->adv_event_start_time + adv_event_dur +
+                               ble_ll_usecs_to_ticks_round_up(BLE_LL_MAFS);
+}
+
+static void
+ble_ll_adv_aux_schedule(struct ble_ll_adv_sm *advsm)
+{
+    /*
+     * For secondary channel we always start by scheduling two consecutive
+     * auxiliary packets at once. Then, after sending one packet we try to
+     * schedule another one as long as there are some data left to send. This
+     * is to make sure we can always calculate AuxPtr to subsequent packet
+     * without need to scheduled it in an interrupt.
+     */
+
+    ble_ll_adv_aux_set_start_time(advsm);
+    ble_ll_adv_aux_schedule_first(advsm);
+    ble_ll_adv_aux_schedule_next(advsm);
 }
 #endif
 
@@ -1302,7 +1482,9 @@ ble_ll_adv_sm_stop(struct ble_ll_adv_sm *advsm)
         /* Remove any scheduled advertising items */
         ble_ll_sched_rmv_elem(&advsm->adv_sch);
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
-        ble_ll_sched_rmv_elem(&advsm->adv_secondary_sch);
+        advsm->aux_active = 0;
+        ble_ll_sched_rmv_elem(&advsm->aux[0].sch);
+        ble_ll_sched_rmv_elem(&advsm->aux[1].sch);
 #endif
 
         /* Set to standby if we are no longer advertising */
@@ -1314,9 +1496,6 @@ ble_ll_adv_sm_stop(struct ble_ll_adv_sm *advsm)
             ble_ll_state_set(BLE_LL_STATE_STANDBY);
             g_ble_ll_cur_adv_sm = NULL;
             ble_ll_scan_chk_resume();
-#ifdef BLE_XCVR_RFCLK
-            ble_ll_sched_rfclk_chk_restart();
-#endif
         }
 #else
         if (ble_ll_state_get() == BLE_LL_STATE_ADV) {
@@ -1325,10 +1504,10 @@ ble_ll_adv_sm_stop(struct ble_ll_adv_sm *advsm)
             ble_ll_state_set(BLE_LL_STATE_STANDBY);
             g_ble_ll_cur_adv_sm = NULL;
             ble_ll_scan_chk_resume();
-#ifdef BLE_XCVR_RFCLK
-            ble_ll_sched_rfclk_chk_restart();
-#endif
         }
+#endif
+#ifdef BLE_XCVR_RFCLK
+        ble_ll_sched_rfclk_chk_restart();
 #endif
         OS_EXIT_CRITICAL(sr);
 
@@ -1351,7 +1530,7 @@ ble_ll_adv_sm_stop(struct ble_ll_adv_sm *advsm)
 }
 
 static void
-ble_ll_adv_scheduled(struct ble_ll_adv_sm *advsm, uint32_t sch_start)
+ble_ll_adv_scheduled(struct ble_ll_adv_sm *advsm, uint32_t sch_start, void *arg)
 {
     /* The event start time is when we start transmission of the adv PDU */
     advsm->adv_event_start_time = sch_start + g_ble_ll_sched_offset_ticks;
@@ -1376,53 +1555,6 @@ ble_ll_adv_scheduled(struct ble_ll_adv_sm *advsm, uint32_t sch_start)
 }
 
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
-static void
-ble_ll_set_adv_secondary_start_time(struct ble_ll_adv_sm *advsm)
-{
-    static const uint8_t bits[8] = {0, 1, 1, 2, 1, 2, 2, 3};
-    struct ble_ll_sched_item *sched = &advsm->adv_sch;
-    uint32_t adv_pdu_dur;
-    uint32_t adv_event_dur;
-    uint8_t chans;
-
-    assert(advsm->adv_chanmask > 0 &&
-           advsm->adv_chanmask <= BLE_HCI_ADV_CHANMASK_DEF);
-
-    chans = bits[advsm->adv_chanmask];
-
-    /*
-     * We want to schedule auxiliary packet as soon as possible after the end
-     * of advertising event, but no sooner than T_MAFS. The interval between
-     * advertising packets is 250 usecs (8.19 ticks) on LE Coded and a bit less
-     * on 1M, but it can vary a bit due to scheduling which we can't really
-     * control. Since we round ticks up for both interval and T_MAFS, we still
-     * have some margin here. The worst thing that can happen is that we skip
-     * last advertising packet which is not a bit problem so leave it as-is, no
-     * need to make code more complicated.
-     */
-
-    /*
-     * XXX: this could be improved if phy has TX-TX transition with controlled
-     *      or predefined interval, but since it makes advertising code even
-     *      more complicated let's skip it for now...
-     */
-
-    adv_pdu_dur = (int32_t)(sched->end_time - sched->start_time) -
-                  g_ble_ll_sched_offset_ticks;
-
-    /* 9 is 8.19 ticks rounded up - see comment above */
-    adv_event_dur = (adv_pdu_dur * chans) + (9 * (chans - 1));
-
-    advsm->adv_secondary_start_time = advsm->adv_event_start_time +
-                                      adv_event_dur +
-                                      ble_ll_usecs_to_ticks_round_up(BLE_LL_MAFS);
-}
-
-static void
-ble_ll_adv_secondary_scheduled(struct ble_ll_adv_sm *advsm, uint32_t sch_start)
-{
-    advsm->adv_secondary_start_time = sch_start + g_ble_ll_sched_offset_ticks;
-}
 #endif
 
 /**
@@ -1495,9 +1627,11 @@ ble_ll_adv_sm_start(struct ble_ll_adv_sm *advsm)
         }
     }
 
-    /* This will generate an RPA for both initiator addr and adva */
 #if (MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_PRIVACY) == 1)
-    ble_ll_adv_chk_rpa_timeout(advsm);
+    /* This will generate an RPA for both initiator addr and adva */
+    if (advsm->own_addr_type > BLE_HCI_ADV_OWN_ADDR_RANDOM) {
+        ble_ll_adv_rpa_update(advsm);
+    }
 #endif
 
     /* Set flag telling us that advertising is enabled */
@@ -1534,14 +1668,11 @@ ble_ll_adv_sm_start(struct ble_ll_adv_sm *advsm)
      * times to the earliest possible start/end.
      */
     ble_ll_adv_set_sched(advsm);
-    ble_ll_sched_adv_new(&advsm->adv_sch, ble_ll_adv_scheduled);
+    ble_ll_sched_adv_new(&advsm->adv_sch, ble_ll_adv_scheduled, NULL);
 
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
     if (!(advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY)) {
-        ble_ll_set_adv_secondary_start_time(advsm);
-        ble_ll_adv_secondary_set_sched(advsm);
-        ble_ll_sched_adv_new(&advsm->adv_secondary_sch,
-                             ble_ll_adv_secondary_scheduled);
+        ble_ll_adv_aux_schedule(advsm);
     }
 #endif
 
@@ -1580,11 +1711,15 @@ ble_ll_adv_set_enable(uint8_t instance, uint8_t enable, int duration,
     int rc;
     struct ble_ll_adv_sm *advsm;
 
-    if (instance >= BLE_LL_ADV_INSTANCES) {
+    if (instance >= BLE_ADV_INSTANCES) {
         return BLE_ERR_INV_HCI_CMD_PARMS;
     }
 
     advsm = &g_ble_ll_adv_sm[instance];
+
+    if (advsm->flags & BLE_LL_ADV_SM_FLAG_ADV_DATA_INCOMPLETE) {
+        return BLE_ERR_CMD_DISALLOWED;
+    }
 
     rc = BLE_ERR_SUCCESS;
     if (enable == 1) {
@@ -1616,6 +1751,44 @@ ble_ll_adv_set_enable(uint8_t instance, uint8_t enable, int duration,
     return rc;
 }
 
+static void
+ble_ll_adv_update_data_mbuf(struct os_mbuf **omp, bool new_data, uint16_t maxlen,
+                            const void *data, uint16_t datalen)
+{
+    struct os_mbuf *om;
+    int ret;
+
+    om = *omp;
+
+    if (new_data) {
+        if (om) {
+            os_mbuf_free_chain(om);
+        }
+
+        om = os_msys_get_pkthdr(datalen, 0);
+        if (!om) {
+            goto done;
+        }
+    }
+
+    assert(om);
+
+    if (OS_MBUF_PKTLEN(om) + datalen > maxlen) {
+        os_mbuf_free_chain(om);
+        om = NULL;
+        goto done;
+    }
+
+    ret = os_mbuf_append(om, data, datalen);
+    if (ret) {
+        os_mbuf_free_chain(om);
+        om = NULL;
+    }
+
+done:
+    *omp = om;
+}
+
 /**
  * Set the scan response data that the controller will send.
  *
@@ -1628,10 +1801,10 @@ int
 ble_ll_adv_set_scan_rsp_data(uint8_t *cmd, uint8_t instance, uint8_t operation)
 {
     uint8_t datalen;
-    uint8_t off = 0;
     struct ble_ll_adv_sm *advsm;
+    bool new_data;
 
-    if (instance >= BLE_LL_ADV_INSTANCES) {
+    if (instance >= BLE_ADV_INSTANCES) {
         return BLE_ERR_INV_HCI_CMD_PARMS;
     }
 
@@ -1657,6 +1830,10 @@ ble_ll_adv_set_scan_rsp_data(uint8_t *cmd, uint8_t instance, uint8_t operation)
         /* TODO mark scan rsp as complete? */
         /* fall through */
     case BLE_HCI_LE_SET_EXT_SCAN_RSP_DATA_OPER_INT:
+        if (!advsm->scan_rsp_data) {
+            return BLE_ERR_INV_HCI_CMD_PARMS;
+        }
+
         if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY) {
             return BLE_ERR_INV_HCI_CMD_PARMS;
         }
@@ -1668,8 +1845,6 @@ ble_ll_adv_set_scan_rsp_data(uint8_t *cmd, uint8_t instance, uint8_t operation)
         if (!datalen) {
             return BLE_ERR_INV_HCI_CMD_PARMS;
         }
-
-        off = advsm->scan_rsp_len;
         break;
     case BLE_HCI_LE_SET_EXT_SCAN_RSP_DATA_OPER_FIRST:
         if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY) {
@@ -1690,9 +1865,12 @@ ble_ll_adv_set_scan_rsp_data(uint8_t *cmd, uint8_t instance, uint8_t operation)
         return BLE_ERR_INV_HCI_CMD_PARMS;
     }
 
-    /* Check for valid advertising data length */
-    if (datalen + off > BLE_SCAN_RSP_DATA_MAX_LEN) {
-        advsm->scan_rsp_len = 0;
+    new_data = (operation == BLE_HCI_LE_SET_EXT_SCAN_RSP_DATA_OPER_COMPLETE) ||
+               (operation == BLE_HCI_LE_SET_EXT_SCAN_RSP_DATA_OPER_FIRST);
+
+    ble_ll_adv_update_data_mbuf(&advsm->scan_rsp_data, new_data,
+                                BLE_SCAN_RSP_DATA_MAX_LEN, cmd + 1, datalen);
+    if (!advsm->scan_rsp_data) {
         return BLE_ERR_MEM_CAPACITY;
     }
 
@@ -1700,10 +1878,6 @@ ble_ll_adv_set_scan_rsp_data(uint8_t *cmd, uint8_t instance, uint8_t operation)
     /* DID shall be updated when host provides new scan response data */
     advsm->adi = (advsm->adi & 0xf000) | (rand() & 0x0fff);
 #endif
-
-    /* Copy the new data into the advertising structure. */
-    advsm->scan_rsp_len = datalen + off;
-    memcpy(advsm->scan_rsp_data + off, cmd + 1, datalen);
 
     return BLE_ERR_SUCCESS;
 }
@@ -1721,10 +1895,10 @@ int
 ble_ll_adv_set_adv_data(uint8_t *cmd, uint8_t instance, uint8_t operation)
 {
     uint8_t datalen;
-    uint8_t off = 0;
     struct ble_ll_adv_sm *advsm;
+    bool new_data;
 
-    if (instance >= BLE_LL_ADV_INSTANCES) {
+    if (instance >= BLE_ADV_INSTANCES) {
         return BLE_ERR_INV_HCI_CMD_PARMS;
     }
 
@@ -1750,6 +1924,7 @@ ble_ll_adv_set_adv_data(uint8_t *cmd, uint8_t instance, uint8_t operation)
             }
         }
 
+        advsm->flags &= ~BLE_LL_ADV_SM_FLAG_ADV_DATA_INCOMPLETE;
         break;
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
     case BLE_HCI_LE_SET_EXT_ADV_DATA_OPER_UNCHANGED:
@@ -1757,7 +1932,7 @@ ble_ll_adv_set_adv_data(uint8_t *cmd, uint8_t instance, uint8_t operation)
             return BLE_ERR_INV_HCI_CMD_PARMS;
         }
 
-        if (!advsm->adv_enabled || !advsm->adv_len || datalen) {
+        if (!advsm->adv_enabled || !ADV_DATA_LEN(advsm) || datalen) {
             return BLE_ERR_INV_HCI_CMD_PARMS;
         }
 
@@ -1765,9 +1940,13 @@ ble_ll_adv_set_adv_data(uint8_t *cmd, uint8_t instance, uint8_t operation)
         advsm->adi = (advsm->adi & 0xf000) | (rand() & 0x0fff);
         return BLE_ERR_SUCCESS;
     case BLE_HCI_LE_SET_EXT_ADV_DATA_OPER_LAST:
-        /* TODO mark adv data as complete? */
+        advsm->flags &= ~BLE_LL_ADV_SM_FLAG_ADV_DATA_INCOMPLETE;
         /* fall through */
     case BLE_HCI_LE_SET_EXT_ADV_DATA_OPER_INT:
+        if (!advsm->adv_data) {
+            return BLE_ERR_INV_HCI_CMD_PARMS;
+        }
+
         if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY) {
             return BLE_ERR_INV_HCI_CMD_PARMS;
         }
@@ -1779,8 +1958,6 @@ ble_ll_adv_set_adv_data(uint8_t *cmd, uint8_t instance, uint8_t operation)
         if (advsm->adv_enabled) {
             return BLE_ERR_CMD_DISALLOWED;
         }
-
-        off = advsm->adv_len;
         break;
     case BLE_HCI_LE_SET_EXT_ADV_DATA_OPER_FIRST:
         if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY) {
@@ -1795,15 +1972,19 @@ ble_ll_adv_set_adv_data(uint8_t *cmd, uint8_t instance, uint8_t operation)
             return BLE_ERR_INV_HCI_CMD_PARMS;
         }
 
+        advsm->flags |= BLE_LL_ADV_SM_FLAG_ADV_DATA_INCOMPLETE;
         break;
 #endif
     default:
         return BLE_ERR_INV_HCI_CMD_PARMS;
     }
 
-    /* Check for valid advertising data length */
-    if (datalen + off > BLE_ADV_DATA_MAX_LEN) {
-        advsm->adv_len = 0;
+    new_data = (operation == BLE_HCI_LE_SET_EXT_ADV_DATA_OPER_COMPLETE) ||
+               (operation == BLE_HCI_LE_SET_EXT_ADV_DATA_OPER_FIRST);
+
+    ble_ll_adv_update_data_mbuf(&advsm->adv_data, new_data, BLE_ADV_DATA_MAX_LEN,
+                                cmd + 1, datalen);
+    if (!advsm->adv_data) {
         return BLE_ERR_MEM_CAPACITY;
     }
 
@@ -1811,10 +1992,6 @@ ble_ll_adv_set_adv_data(uint8_t *cmd, uint8_t instance, uint8_t operation)
     /* DID shall be updated when host provides new advertising data */
     advsm->adi = (advsm->adi & 0xf000) | (rand() & 0x0fff);
 #endif
-
-    /* Copy the new data into the advertising structure. */
-    advsm->adv_len = datalen + off;
-    memcpy(advsm->adv_data + off, cmd + 1, datalen);
 
     return BLE_ERR_SUCCESS;
 }
@@ -1838,7 +2015,7 @@ ble_ll_adv_ext_set_param(uint8_t *cmdbuf, uint8_t *rspbuf, uint8_t *rsplen)
     uint8_t scan_req_notif;
     int8_t tx_power;
 
-    if (cmdbuf[0] >= BLE_LL_ADV_INSTANCES) {
+    if (cmdbuf[0] >= BLE_ADV_INSTANCES) {
         return BLE_ERR_INV_HCI_CMD_PARMS;
     }
 
@@ -1857,8 +2034,8 @@ ble_ll_adv_ext_set_param(uint8_t *cmdbuf, uint8_t *rspbuf, uint8_t *rsplen)
     }
 
     if (props & BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY) {
-        if (advsm->adv_len > BLE_ADV_LEGACY_DATA_MAX_LEN ||
-            advsm->scan_rsp_len > BLE_SCAN_RSP_LEGACY_DATA_MAX_LEN) {
+        if (ADV_DATA_LEN(advsm) > BLE_ADV_LEGACY_DATA_MAX_LEN ||
+            SCAN_RSP_DATA_LEN(advsm) > BLE_SCAN_RSP_LEGACY_DATA_MAX_LEN) {
             return BLE_ERR_INV_HCI_CMD_PARMS;
         }
 
@@ -1893,7 +2070,7 @@ ble_ll_adv_ext_set_param(uint8_t *cmdbuf, uint8_t *rspbuf, uint8_t *rsplen)
     }
 
     if (props & BLE_HCI_LE_SET_EXT_ADV_PROP_HD_DIRECTED) {
-        if (advsm->adv_len || advsm->scan_rsp_len) {
+        if (ADV_DATA_LEN(advsm) || SCAN_RSP_DATA_LEN(advsm)) {
             return BLE_ERR_INV_HCI_CMD_PARMS;
         }
 
@@ -1992,6 +2169,15 @@ ble_ll_adv_ext_set_param(uint8_t *cmdbuf, uint8_t *rspbuf, uint8_t *rsplen)
 
     advsm->props = props;
 
+    /* Set proper mbuf chain for aux data */
+    if (props & BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY) {
+        advsm->aux_data = NULL;
+    } else if (props & BLE_HCI_LE_SET_EXT_ADV_PROP_SCANNABLE) {
+        advsm->aux_data = &advsm->scan_rsp_data;
+    } else {
+        advsm->aux_data = &advsm->adv_data;
+    }
+
     if (scan_req_notif) {
         advsm->flags |= BLE_LL_ADV_SM_FLAG_SCAN_REQ_NOTIF;
     } else {
@@ -2066,7 +2252,7 @@ ble_ll_adv_ext_set_enable(uint8_t *cmd, uint8_t len)
         return BLE_ERR_INV_HCI_CMD_PARMS;
     }
 
-    if (sets > BLE_LL_ADV_INSTANCES) {
+    if (sets > BLE_ADV_INSTANCES) {
         return BLE_ERR_INV_HCI_CMD_PARMS;
     }
 
@@ -2076,7 +2262,7 @@ ble_ll_adv_ext_set_enable(uint8_t *cmd, uint8_t len)
         }
 
         /* disable all instances */
-        for (i = 0; i < BLE_LL_ADV_INSTANCES; i++) {
+        for (i = 0; i < BLE_ADV_INSTANCES; i++) {
             ble_ll_adv_set_enable(i, 0, 0, 0);
         }
 
@@ -2086,7 +2272,7 @@ ble_ll_adv_ext_set_enable(uint8_t *cmd, uint8_t len)
     set = (void *) cmd;
     /* validate instances */
     for (i = 0; i < sets; i++) {
-        if (set->handle >= BLE_LL_ADV_INSTANCES) {
+        if (set->handle >= BLE_ADV_INSTANCES) {
             return BLE_ERR_INV_HCI_CMD_PARMS;
         }
 
@@ -2129,7 +2315,7 @@ ble_ll_adv_set_random_addr(uint8_t *addr, uint8_t instance)
 {
     struct ble_ll_adv_sm *advsm;
 
-    if (instance >= BLE_LL_ADV_INSTANCES) {
+    if (instance >= BLE_ADV_INSTANCES) {
         return BLE_ERR_INV_HCI_CMD_PARMS;
     }
 
@@ -2164,7 +2350,7 @@ ble_ll_adv_remove(uint8_t instance)
      * Should we allow any value for instance ID?
      */
 
-    if (instance >= BLE_LL_ADV_INSTANCES) {
+    if (instance >= BLE_ADV_INSTANCES) {
         return BLE_ERR_INV_HCI_CMD_PARMS;
     }
 
@@ -2172,6 +2358,13 @@ ble_ll_adv_remove(uint8_t instance)
 
     if (advsm->adv_enabled) {
         return BLE_ERR_CMD_DISALLOWED;
+    }
+
+    if (advsm->adv_data) {
+        os_mbuf_free_chain(advsm->adv_data);
+    }
+    if (advsm->scan_rsp_data) {
+        os_mbuf_free_chain(advsm->scan_rsp_data);
     }
 
     ble_ll_adv_sm_init(advsm);
@@ -2189,7 +2382,7 @@ ble_ll_adv_clear_all(void)
 {
     int i;
 
-    for (i = 0; i < BLE_LL_ADV_INSTANCES; i++) {
+    for (i = 0; i < BLE_ADV_INSTANCES; i++) {
         if (g_ble_ll_adv_sm[i].adv_enabled) {
             return BLE_ERR_CMD_DISALLOWED;
         }
@@ -2226,7 +2419,9 @@ ble_ll_adv_rx_req(uint8_t pdu_type, struct os_mbuf *rxpdu)
     uint8_t *peer;
     struct ble_mbuf_hdr *ble_hdr;
     struct ble_ll_adv_sm *advsm;
-    struct os_mbuf *rsp;
+#if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
+    struct aux_conn_rsp_data rsp_data;
+#endif
 
     /* See if adva in the request (scan or connect) matches what we sent */
     advsm = g_ble_ll_cur_adv_sm;
@@ -2288,25 +2483,33 @@ ble_ll_adv_rx_req(uint8_t pdu_type, struct os_mbuf *rxpdu)
     rc = -1;
 
     if (pdu_type == BLE_ADV_PDU_TYPE_SCAN_REQ) {
+        /* XXX TODO: assume we do not need to change phy mode */
+        ble_phy_set_txend_cb(ble_ll_adv_tx_done, advsm);
+
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
         if (advsm->flags & BLE_LL_ADV_SM_FLAG_SCAN_REQ_NOTIF) {
             ble_ll_hci_ev_send_scan_req_recv(advsm->adv_instance, peer,
                                              peer_addr_type);
         }
 
-        rsp = ble_ll_adv_scan_rsp_pdu_make(advsm);
+        /*
+         * We need to store current rxed packet header temporarily so AuxPtr
+         * can be calculated (if necessary) relative to AUX_SCAN_RSP instead of
+         * AUX_ADV_IND.
+         */
+
+        advsm->rx_ble_hdr = ble_hdr;
+        rc = ble_phy_tx(ble_ll_adv_scan_rsp_pdu_make, advsm,
+                        BLE_PHY_TRANSITION_NONE);
+        advsm->rx_ble_hdr = NULL;
 #else
-        rsp = ble_ll_adv_scan_rsp_legacy_pdu_make(advsm);
+        rc = ble_phy_tx(ble_ll_adv_scan_rsp_legacy_pdu_make, advsm,
+                        BLE_PHY_TRANSITION_NONE);
 #endif
-        if (rsp) {
-            /* XXX TODO: assume we do not need to change phy mode */
-            ble_phy_set_txend_cb(ble_ll_adv_tx_done, advsm);
-            rc = ble_phy_tx(rsp, BLE_PHY_TRANSITION_NONE);
-            if (!rc) {
-                ble_hdr->rxinfo.flags |= BLE_MBUF_HDR_F_SCAN_RSP_TXD;
-                STATS_INC(ble_ll_stats, scan_rsp_txg);
-            }
-            os_mbuf_free_chain(rsp);
+
+        if (!rc) {
+            ble_hdr->rxinfo.flags |= BLE_MBUF_HDR_F_SCAN_RSP_TXD;
+            STATS_INC(ble_ll_stats, scan_rsp_txg);
         }
     } else if (pdu_type == BLE_ADV_PDU_TYPE_AUX_CONNECT_REQ) {
         /*
@@ -2325,17 +2528,16 @@ ble_ll_adv_rx_req(uint8_t pdu_type, struct os_mbuf *rxpdu)
         }
 
         /* use remote address used over the air */
-        rsp = ble_ll_adv_aux_conn_rsp_pdu_make(advsm,
-                                               rxbuf + BLE_LL_PDU_HDR_LEN,
-                                               rxbuf[0] & BLE_ADV_PDU_HDR_TXADD_MASK);
-        if (rsp) {
-            ble_phy_set_txend_cb(ble_ll_adv_tx_done, advsm);
-            rc = ble_phy_tx(rsp, BLE_PHY_TRANSITION_NONE);
-            if (!rc) {
-                advsm->flags |= BLE_LL_ADV_SM_FLAG_CONN_RSP_TXD;
-                STATS_INC(ble_ll_stats, aux_conn_rsp_tx);
-            }
-            os_mbuf_free_chain(rsp);
+        rsp_data.advsm = advsm;
+        rsp_data.peer = rxbuf + BLE_LL_PDU_HDR_LEN;
+        rsp_data.rxadd = rxbuf[0] & BLE_ADV_PDU_HDR_TXADD_MASK;
+
+        ble_phy_set_txend_cb(ble_ll_adv_tx_done, advsm);
+        rc = ble_phy_tx(ble_ll_adv_aux_conn_rsp_pdu_make, &rsp_data,
+                        BLE_PHY_TRANSITION_NONE);
+        if (!rc) {
+            advsm->flags |= BLE_LL_ADV_SM_FLAG_CONN_RSP_TXD;
+            STATS_INC(ble_ll_stats, aux_conn_rsp_tx);
         }
 #endif
     }
@@ -2620,7 +2822,8 @@ ble_ll_adv_drop_event(struct ble_ll_adv_sm *advsm)
 
     ble_ll_sched_rmv_elem(&advsm->adv_sch);
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
-    ble_ll_sched_rmv_elem(&advsm->adv_secondary_sch);
+    ble_ll_sched_rmv_elem(&advsm->aux[0].sch);
+    ble_ll_sched_rmv_elem(&advsm->aux[1].sch);
 #endif
 
     advsm->adv_chan = ble_ll_adv_final_chan(advsm);
@@ -2658,18 +2861,8 @@ ble_ll_adv_reschedule_event(struct ble_ll_adv_sm *advsm)
 
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
     if (!(advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY) &&
-                                        !advsm->adv_secondary_sch.enqueued) {
-        ble_ll_set_adv_secondary_start_time(advsm);
-        ble_ll_adv_secondary_set_sched(advsm);
-
-         rc = ble_ll_sched_adv_reschedule(&advsm->adv_secondary_sch,
-                                          &advsm->adv_secondary_start_time, 0);
-         if (rc) {
-             ble_ll_adv_drop_event(advsm);
-             return;
-         }
-
-         advsm->adv_secondary_start_time += g_ble_ll_sched_offset_ticks;
+                                                        !advsm->aux_active) {
+        ble_ll_adv_aux_schedule(advsm);
     }
 #endif
 }
@@ -2786,7 +2979,8 @@ ble_ll_adv_done(struct ble_ll_adv_sm *advsm)
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
         /* If we're past aux (unlikely, but can happen), just drop an event */
         if (!(advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY) &&
-                (advsm->adv_pdu_start_time > advsm->adv_secondary_start_time)) {
+                advsm->aux_active &&
+                advsm->adv_pdu_start_time > AUX_CURRENT(advsm)->start_time) {
             ble_ll_adv_drop_event(advsm);
             return;
         }
@@ -2897,10 +3091,21 @@ ble_ll_adv_event_done(struct os_event *ev)
 static void
 ble_ll_adv_sec_done(struct ble_ll_adv_sm *advsm)
 {
+    struct ble_ll_adv_aux *aux;
+    struct ble_ll_adv_aux *aux_next;
+
     assert(advsm->adv_enabled);
+    assert(advsm->aux_active);
+
+    aux = AUX_CURRENT(advsm);
+
+    if (advsm->aux_not_scanned) {
+        aux_next = AUX_NEXT(advsm);
+        ble_ll_sched_rmv_elem(&aux_next->sch);
+    }
 
     /* Remove anything else scheduled for secondary channel */
-    ble_ll_sched_rmv_elem(&advsm->adv_secondary_sch);
+    ble_ll_sched_rmv_elem(&aux->sch);
     os_eventq_remove(&g_ble_ll_data.ll_evq, &advsm->adv_sec_txdone_ev);
 
     /* Stop advertising due to transmitting connection response */
@@ -2909,12 +3114,20 @@ ble_ll_adv_sec_done(struct ble_ll_adv_sm *advsm)
         return;
     }
 
+    /* If we have next AUX scheduled, try to schedule another one */
+    if (AUX_NEXT(advsm)->sch.enqueued) {
+        advsm->aux_index ^= 1;
+        advsm->aux_first_pdu = 0;
+        ble_ll_adv_aux_schedule_next(advsm);
+        return;
+    }
+
     /* Check if we need to resume scanning */
     ble_ll_scan_chk_resume();
 
     /* Check if advertising timed out */
     if (advsm->duration &&
-        advsm->adv_secondary_start_time >= advsm->adv_end_time) {
+        aux->start_time >= advsm->adv_end_time) {
         ble_ll_hci_ev_send_adv_set_terminated(BLE_ERR_DIR_ADV_TMO,
                                               advsm->adv_instance, 0, 0);
 
@@ -2942,6 +3155,7 @@ ble_ll_adv_sec_done(struct ble_ll_adv_sm *advsm)
          return;
     }
 
+    advsm->aux_active = 0;
     ble_ll_adv_reschedule_event(advsm);
 }
 
@@ -2988,7 +3202,7 @@ ble_ll_adv_can_chg_whitelist(void)
     int i;
 
     rc = 1;
-    for (i = 0; i < BLE_LL_ADV_INSTANCES; ++i) {
+    for (i = 0; i < BLE_ADV_INSTANCES; ++i) {
         advsm = &g_ble_ll_adv_sm[i];
         if (advsm->adv_enabled &&
             (advsm->adv_filter_policy != BLE_HCI_ADV_FILT_NONE)) {
@@ -3073,6 +3287,10 @@ ble_ll_adv_get_peer_rpa(struct ble_ll_adv_sm *advsm)
 void
 ble_ll_adv_wfr_timer_exp(void)
 {
+#if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
+    g_ble_ll_cur_adv_sm->aux_not_scanned = 1;
+#endif
+
     ble_phy_disable();
     ble_ll_adv_tx_done(g_ble_ll_cur_adv_sm);
 }
@@ -3089,7 +3307,7 @@ ble_ll_adv_reset(void)
     int i;
     struct ble_ll_adv_sm *advsm;
 
-    for (i = 0; i < BLE_LL_ADV_INSTANCES; ++i) {
+    for (i = 0; i < BLE_ADV_INSTANCES; ++i) {
         /* Stop advertising state machine */
         advsm = &g_ble_ll_adv_sm[i];
         ble_ll_adv_sm_stop(advsm);
@@ -3129,6 +3347,17 @@ ble_ll_adv_sm_init(struct ble_ll_adv_sm *advsm)
     advsm->adv_sec_txdone_ev.ev_arg = advsm;
 #endif
 
+#if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
+    /* Initialize aux schedulers */
+    advsm->aux_active = 0;
+    advsm->aux[0].sch.cb_arg = advsm;
+    advsm->aux[0].sch.sched_cb = ble_ll_adv_secondary_tx_start_cb;
+    advsm->aux[0].sch.sched_type = BLE_LL_SCHED_TYPE_ADV;
+    advsm->aux[1].sch.cb_arg = advsm;
+    advsm->aux[1].sch.sched_cb = ble_ll_adv_secondary_tx_start_cb;
+    advsm->aux[1].sch.sched_type = BLE_LL_SCHED_TYPE_ADV;
+#endif
+
     /*XXX Configure instances to be legacy on start */
     advsm->props |= BLE_HCI_LE_SET_EXT_ADV_PROP_SCANNABLE;
     advsm->props |= BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY;
@@ -3144,7 +3373,7 @@ ble_ll_adv_init(void)
     int i;
 
     /* Set default advertising parameters */
-    for (i = 0; i < BLE_LL_ADV_INSTANCES; ++i) {
+    for (i = 0; i < BLE_ADV_INSTANCES; ++i) {
         g_ble_ll_adv_sm[i].adv_instance = i;
         ble_ll_adv_sm_init(&g_ble_ll_adv_sm[i]);
     }

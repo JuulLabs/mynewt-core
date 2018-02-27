@@ -187,6 +187,7 @@ extern STATS_SECT_DECL(ble_ll_stats) ble_ll_stats;
 #define BLE_LL_STATE_SCANNING       (2)
 #define BLE_LL_STATE_INITIATING     (3)
 #define BLE_LL_STATE_CONNECTION     (4)
+#define BLE_LL_STATE_DTM            (5)
 
 /* LL Features */
 #define BLE_LL_FEAT_LE_ENCRYPTION    (0x00000001)
@@ -239,8 +240,9 @@ struct ble_dev_addr
 #define BLE_LL_ACC_ADDR_LEN     (4)
 #define BLE_LL_CRC_LEN          (3)
 #define BLE_LL_PDU_HDR_LEN      (2)
+#define BLE_LL_MAX_PAYLOAD_LEN  (255)
 #define BLE_LL_MIN_PDU_LEN      (BLE_LL_PDU_HDR_LEN)
-#define BLE_LL_MAX_PDU_LEN      (257)
+#define BLE_LL_MAX_PDU_LEN      ((BLE_LL_PDU_HDR_LEN) + (BLE_LL_MAX_PAYLOAD_LEN))
 #define BLE_LL_CRCINIT_ADV      (0x555555)
 
 /* Access address for advertising channels */
@@ -258,7 +260,6 @@ struct ble_dev_addr
 #define BLE_ADV_PDU_HDR_CHSEL_MASK          (0x20)
 #define BLE_ADV_PDU_HDR_TXADD_MASK          (0x40)
 #define BLE_ADV_PDU_HDR_RXADD_MASK          (0x80)
-#define BLE_ADV_PDU_HDR_LEN_MASK            (0x3F)
 
 /* Advertising channel PDU types */
 #define BLE_ADV_PDU_TYPE_ADV_IND            (0)
@@ -277,14 +278,8 @@ struct ble_dev_addr
 #define BLE_ADV_PDU_TYPE_AUX_SCAN_REQ       BLE_ADV_PDU_TYPE_SCAN_REQ
 #define BLE_ADV_PDU_TYPE_AUX_CONNECT_RSP    (8)
 
-#define BLE_ADV_PDU_TYPE_AUX_SCAN_REQ       BLE_ADV_PDU_TYPE_SCAN_REQ
-#define BLE_ADV_PDU_TYPE_AUX_CONNECT_REQ    BLE_ADV_PDU_TYPE_CONNECT_REQ
-#define BLE_ADV_PDU_TYPE_ADV_EXT_IND        (7)
-#define BLE_ADV_PDU_TYPE_AUX_ADV_IND        BLE_ADV_PDU_TYPE_ADV_EXT_IND
-#define BLE_ADV_PDU_TYPE_AUX_SCAN_RSP       BLE_ADV_PDU_TYPE_ADV_EXT_IND
-#define BLE_ADV_PDU_TYPE_AUX_SYNC_IND       BLE_ADV_PDU_TYPE_ADV_EXT_IND
-#define BLE_ADV_PDU_TYPE_AUX_CHAIN_IND      BLE_ADV_PDU_TYPE_ADV_EXT_IND
-#define BLE_ADV_PDU_TYPE_AUX_CONNECT_RSP    (8)
+/* Extended Header Length (6b) + AdvMode (2b) */
+#define BLE_LL_EXT_ADV_HDR_LEN          (1)
 
 #define BLE_LL_EXT_ADV_ADVA_BIT         (0)
 #define BLE_LL_EXT_ADV_TARGETA_BIT      (1)
@@ -294,6 +289,7 @@ struct ble_dev_addr
 #define BLE_LL_EXT_ADV_SYNC_INFO_BIT    (5)
 #define BLE_LL_EXT_ADV_TX_POWER_BIT     (6)
 
+#define BLE_LL_EXT_ADV_FLAGS_SIZE       (1)
 #define BLE_LL_EXT_ADV_ADVA_SIZE        (6)
 #define BLE_LL_EXT_ADV_TARGETA_SIZE     (6)
 #define BLE_LL_EXT_ADV_DATA_INFO_SIZE   (2)
@@ -431,6 +427,9 @@ int ble_ll_rx_start(uint8_t *rxbuf, uint8_t chan, struct ble_mbuf_hdr *hdr);
 
 /* Called by the PHY when a packet reception ends */
 int ble_ll_rx_end(uint8_t *rxbuf, struct ble_mbuf_hdr *rxhdr);
+
+/* Helper callback to tx mbuf using ble_phy_tx() */
+uint8_t ble_ll_tx_mbuf_pducb(uint8_t *dptr, void *pducb_arg, uint8_t *hdr_byte);
 
 /*--- Controller API ---*/
 void ble_ll_mbuf_init(struct os_mbuf *m, uint8_t pdulen, uint8_t hdr);

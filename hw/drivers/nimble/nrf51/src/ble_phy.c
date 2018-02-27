@@ -98,6 +98,14 @@ static uint32_t g_ble_phy_rx_buf[(BLE_PHY_MAX_PDU_LEN + 3) / 4];
 static uint32_t g_ble_phy_enc_buf[(NRF_ENC_BUF_SIZE + 3) / 4];
 #endif
 
+/* RF center frequency for each channel index (offset from 2400 MHz) */
+static const uint8_t g_ble_phy_chan_freq[BLE_PHY_NUM_CHANS] = {
+     4,  6,  8, 10, 12, 14, 16, 18, 20, 22, /* 0-9 */
+    24, 28, 30, 32, 34, 36, 38, 40, 42, 44, /* 10-19 */
+    46, 48, 50, 52, 54, 56, 58, 60, 62, 64, /* 20-29 */
+    66, 68, 70, 72, 74, 76, 78,  2, 26, 80, /* 30-39 */
+};
+
 /* Statistics */
 STATS_SECT_START(ble_phy_stats)
     STATS_SECT_ENTRY(phy_isrs)
@@ -266,10 +274,20 @@ nrf_wait_disabled(void)
 {
     uint32_t state;
 
-    state = NRF_RADIO->STATE;
+    /*
+     * RX and TX states have the same values except for 3rd bit (0=RX, 1=TX) so
+     * we use RX symbols only.
+     */
+    state = NRF_RADIO->STATE & 0x07;
+
     if (state != RADIO_STATE_STATE_Disabled) {
-        if ((state == RADIO_STATE_STATE_RxDisable) ||
-            (state == RADIO_STATE_STATE_TxDisable)) {
+        /* If PHY is in idle state for whatever reason, disable it now */
+        if (state == RADIO_STATE_STATE_RxIdle) {
+            NRF_RADIO->TASKS_DISABLE = 1;
+            STATS_INC(ble_phy_stats, radio_state_errs);
+        }
+
+        if (state == RADIO_STATE_STATE_RxDisable) {
             /* This will end within a short time (6 usecs). Just poll */
             while (NRF_RADIO->STATE == state) {
                 /* If this fails, something is really wrong. Should last
@@ -1084,26 +1102,21 @@ ble_phy_rx_set_start_time(uint32_t cputime, uint8_t rem_usecs)
 }
 
 int
-ble_phy_tx(struct os_mbuf *txpdu, uint8_t end_trans)
+ble_phy_tx(ble_phy_tx_pducb_t pducb, void *pducb_arg, uint8_t end_trans)
 {
     int rc;
     uint8_t *dptr;
     uint8_t payload_len;
+    uint8_t payload_off;
+    uint8_t hdr_byte;
     uint32_t state;
     uint32_t shortcuts;
-    struct ble_mbuf_hdr *ble_hdr;
-
-    /* Better have a pdu! */
-    assert(txpdu != NULL);
 
     /*
      * This check is to make sure that the radio is not in a state where
      * it is moving to disabled state. If so, let it get there.
      */
     nrf_wait_disabled();
-
-    ble_hdr = BLE_MBUF_HDR_PTR(txpdu);
-    payload_len = ble_hdr->txinfo.pyld_len;
 
     /*
      * XXX: Although we may not have to do this here, I clear all the PPI
@@ -1119,10 +1132,7 @@ ble_phy_tx(struct os_mbuf *txpdu, uint8_t end_trans)
     if (g_ble_phy_data.phy_encrypted) {
         /* RAM representation has S0, LENGTH and S1 fields. (3 bytes) */
         dptr = (uint8_t *)&g_ble_phy_enc_buf[0];
-        dptr[0] = ble_hdr->txinfo.hdr_byte;
-        dptr[1] = payload_len;
-        dptr[2] = 0;
-        dptr += 3;
+        payload_off = 3;
 
         NRF_CCM->SHORTS = 1;
         NRF_CCM->INPTR = (uint32_t)&g_ble_phy_enc_buf[0];
@@ -1141,9 +1151,7 @@ ble_phy_tx(struct os_mbuf *txpdu, uint8_t end_trans)
 #endif
         /* RAM representation has S0 and LENGTH fields (2 bytes) */
         dptr = (uint8_t *)&g_ble_phy_tx_buf[0];
-        dptr[0] = ble_hdr->txinfo.hdr_byte;
-        dptr[1] = payload_len;
-        dptr += 2;
+        payload_off = 2;
     }
 #else
 
@@ -1155,9 +1163,7 @@ ble_phy_tx(struct os_mbuf *txpdu, uint8_t end_trans)
 
     /* RAM representation has S0 and LENGTH fields (2 bytes) */
     dptr = (uint8_t *)&g_ble_phy_tx_buf[0];
-    dptr[0] = ble_hdr->txinfo.hdr_byte;
-    dptr[1] = payload_len;
-    dptr += 2;
+    payload_off = 2;
 #endif
 
     NRF_RADIO->PACKETPTR = (uint32_t)&g_ble_phy_tx_buf[0];
@@ -1175,17 +1181,25 @@ ble_phy_tx(struct os_mbuf *txpdu, uint8_t end_trans)
     NRF_RADIO->SHORTS = shortcuts;
     NRF_RADIO->INTENSET = RADIO_INTENSET_DISABLED_Msk;
 
-    /* Set transmitted payload length */
-    g_ble_phy_data.phy_tx_pyld_len = payload_len;
+    /* Set PDU payload */
+    payload_len = pducb(&dptr[payload_off], pducb_arg, &hdr_byte);
+
+    /* Set PDU header */
+    dptr[0] = hdr_byte;
+    dptr[1] = payload_len;
+    if (payload_off > 2) {
+        dptr[2] = 0;
+    }
 
     /* Set the PHY transition */
     g_ble_phy_data.phy_transition = end_trans;
 
+    /* Set transmitted payload length */
+    g_ble_phy_data.phy_tx_pyld_len = payload_len;
+
     /* If we already started transmitting, abort it! */
     state = NRF_RADIO->STATE;
     if (state != RADIO_STATE_STATE_Tx) {
-        /* Copy data from mbuf into transmit buffer */
-        os_mbuf_copydata(txpdu, ble_hdr->txinfo.offset, payload_len, dptr);
 
         /* Set phy state to transmitting and count packet statistics */
         g_ble_phy_data.phy_state = BLE_PHY_STATE_TX;
@@ -1288,7 +1302,6 @@ ble_phy_txpwr_get(void)
 int
 ble_phy_setchan(uint8_t chan, uint32_t access_addr, uint32_t crcinit)
 {
-    uint8_t freq;
     uint32_t prefix;
 
     assert(chan < BLE_PHY_NUM_CHANS);
@@ -1300,16 +1313,6 @@ ble_phy_setchan(uint8_t chan, uint32_t access_addr, uint32_t crcinit)
 
     /* Get correct frequency */
     if (chan < BLE_PHY_NUM_DATA_CHANS) {
-        if (chan < 11) {
-            /* Data channel 0 starts at 2404. 0 - 10 are contiguous */
-            freq = (BLE_PHY_DATA_CHAN0_FREQ_MHZ - 2400) +
-                   (BLE_PHY_CHAN_SPACING_MHZ * chan);
-        } else {
-            /* Data channel 11 starts at 2428. 0 - 10 are contiguous */
-            freq = (BLE_PHY_DATA_CHAN0_FREQ_MHZ - 2400) +
-                   (BLE_PHY_CHAN_SPACING_MHZ * (chan + 1));
-        }
-
         /* Set current access address */
         g_ble_phy_data.phy_access_address = access_addr;
 
@@ -1323,16 +1326,6 @@ ble_phy_setchan(uint8_t chan, uint32_t access_addr, uint32_t crcinit)
         NRF_RADIO->RXADDRESSES = (1 << 1);
         NRF_RADIO->CRCINIT = crcinit;
     } else {
-        if (chan == 37) {
-            freq = BLE_PHY_CHAN_SPACING_MHZ;
-        } else if (chan == 38) {
-            /* This advertising channel is at 2426 MHz */
-            freq = BLE_PHY_CHAN_SPACING_MHZ * 13;
-        } else {
-            /* This advertising channel is at 2480 MHz */
-            freq = BLE_PHY_CHAN_SPACING_MHZ * 40;
-        }
-
         /* Logical adddress 0 preconfigured */
         NRF_RADIO->TXADDRESS = 0;
         NRF_RADIO->RXADDRESSES = (1 << 0);
@@ -1344,7 +1337,7 @@ ble_phy_setchan(uint8_t chan, uint32_t access_addr, uint32_t crcinit)
 
     /* Set the frequency and the data whitening initial value */
     g_ble_phy_data.phy_chan = chan;
-    NRF_RADIO->FREQUENCY = freq;
+    NRF_RADIO->FREQUENCY = g_ble_phy_chan_freq[chan];
     NRF_RADIO->DATAWHITEIV = chan;
 
     ble_ll_log(BLE_LL_LOG_ID_PHY_SETCHAN, chan, freq, access_addr);

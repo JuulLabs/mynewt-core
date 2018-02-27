@@ -76,7 +76,17 @@ struct sensor_read_ctx {
 struct sensor_timestamp sensor_base_ts;
 struct os_callout st_up_osco;
 
+static void sensor_notify_ev_cb(struct os_event * ev);
 static void sensor_read_ev_cb(struct os_event *ev);
+static void sensor_interrupt_ev_cb(struct os_event *ev);
+
+static struct os_event sensor_interrupt_event = {
+    .ev_cb = sensor_interrupt_ev_cb,
+};
+
+static struct os_event sensor_notify_event = {
+    .ev_cb = sensor_notify_ev_cb,
+};
 
   /** OS event - for doing a sensor read */
 static struct os_event sensor_read_event = {
@@ -148,7 +158,7 @@ insert:
 }
 
 /**
- * Remove a sensor type trait. This allows a calling application to unset
+ * Remove a sensor type trait. This allows a calling application to clear
  * sensortype trait for a given sensor object.
  *
  * @param The sensor object
@@ -192,6 +202,13 @@ sensor_insert_type_trait(struct sensor *sensor, struct sensor_type_traits *stt)
 {
     struct sensor_type_traits *cursor, *prev;
     int rc;
+
+    if (!sensor) {
+        rc = SYS_EINVAL;
+        goto err;
+    }
+
+    stt->stt_sensor = sensor;
 
     rc = sensor_lock(sensor);
     if (rc != 0) {
@@ -949,20 +966,136 @@ sensor_unregister_listener(struct sensor *sensor,
         struct sensor_listener *listener)
 {
     int rc;
+    struct sensor_listener *tmp;
 
     rc = sensor_lock(sensor);
     if (rc != 0) {
         goto err;
     }
 
-    /* Remove this entry from the list */
-    SLIST_REMOVE(&sensor->s_listener_list, listener, sensor_listener,
-            sl_next);
+    SLIST_FOREACH(tmp, &sensor->s_listener_list, sl_next) {
+        if (listener == tmp) {
+        /* Remove this entry from the list */
+            SLIST_REMOVE(&sensor->s_listener_list, listener, sensor_listener,
+                    sl_next);
+            break;
+        }
+    }
 
     sensor_unlock(sensor);
 
     return (0);
 err:
+    return (rc);
+}
+
+static int
+sensor_set_notification(struct sensor *sensor)
+{
+    sensor_event_type_t event_type;
+    const struct sensor_notifier *notifier;
+    int rc;
+
+    event_type = 0;
+    SLIST_FOREACH(notifier, &sensor->s_notifier_list, sn_next) {
+        event_type |= notifier->sn_sensor_event_type;
+    }
+
+    if (sensor->s_funcs->sd_set_notification) {
+        rc = sensor->s_funcs->sd_set_notification(sensor, event_type);
+    } else {
+        rc = SYS_ENODEV;
+    }
+
+    return rc;
+}
+
+/**
+ * Register a sensor notifier. This allows a calling application to receive
+ * callbacks any time a requested event is observed.
+ *
+ * @param The sensor to register the notifier on
+ * @param The notifier to register
+ *
+ * @return 0 on success, non-zero error code on failure.
+ */
+int
+sensor_register_notifier(struct sensor *sensor,
+                         struct sensor_notifier *notifier)
+{
+    int rc;
+    struct sensor_notifier *tmp;
+
+    rc = sensor_lock(sensor);
+    if (rc != 0) {
+        goto err;
+    }
+
+    /* Check if notifier is not already on the list */
+    SLIST_FOREACH(tmp, &sensor->s_notifier_list, sn_next) {
+        if (notifier == tmp) {
+            rc = SYS_EINVAL;
+            goto err;
+        }
+    }
+
+    SLIST_INSERT_HEAD(&sensor->s_notifier_list, notifier, sn_next);
+
+    rc = sensor_set_notification(sensor);
+    if (rc != 0) {
+        goto remove;
+    }
+
+    sensor_unlock(sensor);
+
+    return (0);
+
+remove:
+    SLIST_REMOVE(&sensor->s_notifier_list, notifier, sensor_notifier,
+            sn_next);
+
+err:
+    sensor_unlock(sensor);
+    return (rc);
+}
+
+/**
+ * Un-register a sensor notifier. This allows a calling application to stop
+ * receiving callbacks for events on the sensor object.
+ *
+ * @param The sensor object to un-register the notifier on
+ * @param The notifier to remove from the notification list
+ *
+ * @return 0 on success, non-zero error code on failure.
+ */
+int
+sensor_unregister_notifier(struct sensor *sensor,
+                           struct sensor_notifier *notifier)
+{
+    int rc = 0;
+    struct sensor_notifier *tmp;
+
+    rc = sensor_lock(sensor);
+    if (rc != 0) {
+        goto done;
+    }
+
+    SLIST_FOREACH(tmp, &sensor->s_notifier_list, sn_next) {
+        if (notifier == tmp) {
+            SLIST_REMOVE(&sensor->s_notifier_list, notifier, sensor_notifier,
+                         sn_next);
+            break;
+        }
+    }
+
+    sensor_unlock(sensor);
+
+    if (sensor->s_funcs->sd_unset_notification) {
+        rc = sensor->s_funcs->sd_unset_notification(sensor,
+                                               notifier->sn_sensor_event_type);
+    }
+
+done:
     return (rc);
 }
 
@@ -987,9 +1120,33 @@ sensor_read_data_func(struct sensor *sensor, void *arg, void *data,
     /* Call data function */
     if (ctx->user_func != NULL) {
         return (ctx->user_func(sensor, ctx->user_arg, data, type));
-    } else {
-        return (0);
     }
+
+    return (0);
+}
+
+/**
+ * Puts a interrupt event on the sensor manager evq
+ *
+ * @param interrupt event context
+ */
+void
+sensor_mgr_put_interrupt_evt(struct sensor *sensor)
+{
+    sensor_interrupt_event.ev_arg = sensor;
+    os_eventq_put(sensor_mgr_evq_get(), &sensor_interrupt_event);
+}
+
+/**
+ * Puts a notification event on the sensor manager evq
+ *
+ * @param notification event context
+ */
+void
+sensor_mgr_put_notify_evt(struct sensor_notify_ev_ctx *ctx)
+{
+    sensor_notify_event.ev_arg = ctx;
+    os_eventq_put(sensor_mgr_evq_get(), &sensor_notify_event);
 }
 
 /**
@@ -1005,13 +1162,42 @@ sensor_mgr_put_read_evt(void *arg)
 }
 
 static void
+sensor_interrupt_ev_cb(struct os_event *ev)
+{
+    struct sensor *sensor;
+
+    sensor = ev->ev_arg;
+
+    if (sensor && sensor->s_funcs->sd_handle_interrupt) {
+        sensor->s_funcs->sd_handle_interrupt(sensor);
+    }
+}
+
+static void
+sensor_notify_ev_cb(struct os_event * ev)
+{
+    const struct sensor_notify_ev_ctx *ctx;
+    const struct sensor_notifier *notifier;
+
+    ctx = ev->ev_arg;
+
+    SLIST_FOREACH(notifier, &ctx->snec_sensor->s_notifier_list, sn_next) {
+        if (notifier->sn_sensor_event_type & ctx->snec_evtype) {
+            notifier->sn_func(ctx->snec_sensor,
+                              notifier->sn_arg,
+                              ctx->snec_evtype);
+        }
+    }
+}
+
+static void
 sensor_read_ev_cb(struct os_event *ev)
 {
     int rc;
-    struct sensor_read_ev_ctx *srec;
+    struct sensor_type_traits *stt;
 
-    srec = ev->ev_arg;
-    rc = sensor_read(srec->srec_sensor, srec->srec_type, NULL, NULL,
+    stt = ev->ev_arg;
+    rc = sensor_read(stt->stt_sensor, stt->stt_sensor_type, NULL, NULL,
                      OS_TIMEOUT_NEVER);
     assert(rc == 0);
 }
@@ -1713,6 +1899,7 @@ sensor_set_thresh(char *devname, struct sensor_type_traits *stt)
         stt_tmp->stt_low_thresh = stt->stt_low_thresh;
         stt_tmp->stt_high_thresh = stt->stt_high_thresh;
         stt_tmp->stt_algo = stt->stt_algo;
+        stt_tmp->stt_sensor = sensor;
         sensor_unlock(sensor);
     } else {
         rc = SYS_EINVAL;
@@ -1721,14 +1908,104 @@ sensor_set_thresh(char *devname, struct sensor_type_traits *stt)
 
     sensor_set_trigger_cmp_algo(sensor, stt_tmp);
 
+    rc = sensor_lock(sensor);
+    if (rc) {
+        goto err;
+    }
+
     if (sensor->s_funcs->sd_set_trigger_thresh) {
         rc = sensor->s_funcs->sd_set_trigger_thresh(sensor,
                                                     stt_tmp->stt_sensor_type,
                                                     stt_tmp);
         if (rc) {
+            sensor_unlock(sensor);
             goto err;
         }
     }
+
+    sensor_unlock(sensor);
+
+    return 0;
+err:
+    return rc;
+}
+
+/**
+ * Clear the low threshold for a sensor
+ *
+ * @param name of the sensor
+ * @param sensor type
+ *
+ * @return 0 on success, non-zero on failure
+ */
+int
+sensor_clear_low_thresh(char *devname, sensor_type_t type)
+{
+    struct sensor *sensor;
+    struct sensor_type_traits *stt_tmp;
+    int rc;
+
+    sensor = sensor_get_type_traits_byname(devname, &stt_tmp, type);
+    if (!sensor || !stt_tmp) {
+        rc = SYS_EINVAL;
+        goto err;
+    }
+
+    rc = sensor_lock(sensor);
+    if (rc) {
+        goto err;
+    }
+
+    if (sensor->s_funcs->sd_clear_low_trigger_thresh) {
+        rc = sensor->s_funcs->sd_clear_low_trigger_thresh(sensor, type);
+        if (rc) {
+            sensor_unlock(sensor);
+            goto err;
+        }
+    }
+
+    sensor_unlock(sensor);
+
+    return 0;
+err:
+    return rc;
+}
+
+/**
+ * Clear the high threshold for a sensor
+ *
+ * @param name of the sensor
+ * @param sensor type
+ *
+ * @return 0 on success, non-zero on failure
+ */
+int
+sensor_clear_high_thresh(char *devname, sensor_type_t type)
+{
+    struct sensor *sensor;
+    struct sensor_type_traits *stt_tmp;
+    int rc;
+
+    sensor = sensor_get_type_traits_byname(devname, &stt_tmp, type);
+    if (!sensor || !stt_tmp) {
+        rc = SYS_EINVAL;
+        goto err;
+    }
+
+    rc = sensor_lock(sensor);
+    if (rc) {
+        goto err;
+    }
+
+    if (sensor->s_funcs->sd_clear_high_trigger_thresh) {
+        rc = sensor->s_funcs->sd_clear_high_trigger_thresh(sensor, type);
+        if (rc) {
+            sensor_unlock(sensor);
+            goto err;
+        }
+    }
+
+    sensor_unlock(sensor);
 
     return 0;
 err:

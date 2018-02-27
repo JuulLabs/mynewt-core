@@ -24,6 +24,7 @@
 #include "hal/hal_system.h"
 #include "hal/hal_gpio.h"
 #include "bsp/bsp.h"
+#include "shell/shell.h"
 
 /* BLE */
 #include "nimble/ble.h"
@@ -33,8 +34,8 @@
 
 #define BT_DBG_ENABLED (MYNEWT_VAL(BLE_MESH_DEBUG))
 
-/* Company ID*/
-#define CID_VENDOR 0xFFFF
+/* Company ID */
+#define CID_VENDOR 0x05C3
 #define STANDARD_TEST_ID 0x00
 #define TEST_ID 0x01
 static int recent_test_id = STANDARD_TEST_ID;
@@ -43,10 +44,14 @@ static int recent_test_id = STANDARD_TEST_ID;
 
 static bool has_reg_fault = true;
 
-static struct bt_mesh_cfg cfg_srv = {
+static struct bt_mesh_cfg_srv cfg_srv = {
     .relay = BT_MESH_RELAY_DISABLED,
     .beacon = BT_MESH_BEACON_ENABLED,
-    .frnd = BT_MESH_FRIEND_NOT_SUPPORTED,
+#if MYNEWT_VAL(BLE_MESH_FRIEND)
+    .frnd = BT_MESH_FRIEND_ENABLED,
+#else
+    .gatt_proxy = BT_MESH_GATT_PROXY_NOT_SUPPORTED,
+#endif
 #if MYNEWT_VAL(BLE_MESH_GATT_PROXY)
     .gatt_proxy = BT_MESH_GATT_PROXY_ENABLED,
 #else
@@ -136,36 +141,79 @@ fault_test(struct bt_mesh_model *model, uint8_t test_id, uint16_t company_id)
     return 0;
 }
 
-static struct bt_mesh_health health_srv = {
-        .fault_get_cur = &fault_get_cur,
-        .fault_get_reg = &fault_get_reg,
-        .fault_clear = &fault_clear,
-        .fault_test = &fault_test,
+static const struct bt_mesh_health_srv_cb health_srv_cb = {
+    .fault_get_cur = &fault_get_cur,
+    .fault_get_reg = &fault_get_reg,
+    .fault_clear = &fault_clear,
+    .fault_test = &fault_test,
 };
+
+static struct bt_mesh_health_srv health_srv = {
+    .cb = &health_srv_cb,
+};
+
+static struct bt_mesh_model_pub health_pub;
+
+static void
+health_pub_init(void)
+{
+    health_pub.msg  = BT_MESH_HEALTH_FAULT_MSG(0);
+}
 
 static struct bt_mesh_model_pub gen_level_pub;
 static struct bt_mesh_model_pub gen_onoff_pub;
+
+static uint8_t gen_on_off_state;
+static int16_t gen_level_state;
+
+static void gen_onoff_status(struct bt_mesh_model *model,
+                             struct bt_mesh_msg_ctx *ctx)
+{
+    struct os_mbuf *msg = NET_BUF_SIMPLE(3);
+    uint8_t *status;
+
+    console_printf("#mesh-onoff STATUS\n");
+
+    bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x04));
+    status = net_buf_simple_add(msg, 1);
+    *status = gen_on_off_state;
+
+    if (bt_mesh_model_send(model, ctx, msg, NULL, NULL)) {
+        console_printf("#mesh-onoff STATUS: send status failed\n");
+    }
+
+    os_mbuf_free_chain(msg);
+}
 
 static void gen_onoff_get(struct bt_mesh_model *model,
               struct bt_mesh_msg_ctx *ctx,
               struct os_mbuf *buf)
 {
-    console_printf("GET\n");
+    console_printf("#mesh-onoff GET\n");
+
+    gen_onoff_status(model, ctx);
 }
 
 static void gen_onoff_set(struct bt_mesh_model *model,
               struct bt_mesh_msg_ctx *ctx,
               struct os_mbuf *buf)
 {
-    hal_gpio_write(LED_2, !buf->om_data[0]);
-    console_printf("SET\n");
+    console_printf("#mesh-onoff SET\n");
+
+    gen_on_off_state = buf->om_data[0];
+    hal_gpio_write(LED_2, !gen_on_off_state);
+
+    gen_onoff_status(model, ctx);
 }
 
 static void gen_onoff_set_unack(struct bt_mesh_model *model,
                 struct bt_mesh_msg_ctx *ctx,
                 struct os_mbuf *buf)
 {
-    console_printf("SET UNACK\n");
+    console_printf("#mesh-onoff SET-UNACK\n");
+
+    gen_on_off_state = buf->om_data[0];
+    hal_gpio_write(LED_2, !gen_on_off_state);
 }
 
 static const struct bt_mesh_model_op gen_onoff_op[] = {
@@ -175,34 +223,86 @@ static const struct bt_mesh_model_op gen_onoff_op[] = {
     BT_MESH_MODEL_OP_END,
 };
 
+static void gen_level_status(struct bt_mesh_model *model,
+                             struct bt_mesh_msg_ctx *ctx)
+{
+    struct os_mbuf *msg = NET_BUF_SIMPLE(4);
+
+    console_printf("#mesh-level STATUS\n");
+
+    bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x08));
+    net_buf_simple_add_le16(msg, gen_level_state);
+
+    if (bt_mesh_model_send(model, ctx, msg, NULL, NULL)) {
+        console_printf("#mesh-level STATUS: send status failed\n");
+    }
+
+    os_mbuf_free_chain(msg);
+}
+
 static void gen_level_get(struct bt_mesh_model *model,
               struct bt_mesh_msg_ctx *ctx,
               struct os_mbuf *buf)
 {
+    console_printf("#mesh-level GET\n");
+
+    gen_level_status(model, ctx);
 }
 
 static void gen_level_set(struct bt_mesh_model *model,
               struct bt_mesh_msg_ctx *ctx,
               struct os_mbuf *buf)
 {
+    int16_t level;
+
+    level = (int16_t) net_buf_simple_pull_le16(buf);
+    console_printf("#mesh-level SET: level=%d\n", level);
+
+    gen_level_status(model, ctx);
+
+    gen_level_state = level;
+    console_printf("#mesh-level: level=%d\n", gen_level_state);
 }
 
 static void gen_level_set_unack(struct bt_mesh_model *model,
                 struct bt_mesh_msg_ctx *ctx,
                 struct os_mbuf *buf)
 {
+    int16_t level;
+
+    level = (int16_t) net_buf_simple_pull_le16(buf);
+    console_printf("#mesh-level SET-UNACK: level=%d\n", level);
+
+    gen_level_state = level;
+    console_printf("#mesh-level: level=%d\n", gen_level_state);
 }
 
 static void gen_delta_set(struct bt_mesh_model *model,
               struct bt_mesh_msg_ctx *ctx,
               struct os_mbuf *buf)
 {
+    int16_t delta_level;
+
+    delta_level = (int16_t) net_buf_simple_pull_le16(buf);
+    console_printf("#mesh-level DELTA-SET: delta_level=%d\n", delta_level);
+
+    gen_level_status(model, ctx);
+
+    gen_level_state += delta_level;
+    console_printf("#mesh-level: level=%d\n", gen_level_state);
 }
 
 static void gen_delta_set_unack(struct bt_mesh_model *model,
                 struct bt_mesh_msg_ctx *ctx,
                 struct os_mbuf *buf)
 {
+    int16_t delta_level;
+
+    delta_level = (int16_t) net_buf_simple_pull_le16(buf);
+    console_printf("#mesh-level DELTA-SET: delta_level=%d\n", delta_level);
+
+    gen_level_state += delta_level;
+    console_printf("#mesh-level: level=%d\n", gen_level_state);
 }
 
 static void gen_move_set(struct bt_mesh_model *model,
@@ -230,7 +330,7 @@ static const struct bt_mesh_model_op gen_level_op[] = {
 
 static struct bt_mesh_model root_models[] = {
     BT_MESH_MODEL_CFG_SRV(&cfg_srv),
-    BT_MESH_MODEL_HEALTH_SRV(&health_srv),
+    BT_MESH_MODEL_HEALTH_SRV(&health_srv, &health_pub),
     BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_SRV, gen_onoff_op,
               &gen_onoff_pub, NULL),
     BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_LEVEL_SRV, gen_level_op,
@@ -252,16 +352,16 @@ static const struct bt_mesh_comp comp = {
     .elem_count = ARRAY_SIZE(elements),
 };
 
-static int output_number(bt_mesh_output_action action, uint32_t number)
+static int output_number(bt_mesh_output_action_t action, uint32_t number)
 {
     console_printf("OOB Number: %lu\n", number);
 
     return 0;
 }
 
-static void prov_complete(void)
+static void prov_complete(u16_t net_idx, u16_t addr)
 {
-    console_printf("Provisioning completed\n");
+    console_printf("Local node provisioned, primary address 0x%04x\n", addr);
 }
 
 static const uint8_t dev_uuid[16] = MYNEWT_VAL(BLE_MESH_DEV_UUID);
@@ -300,6 +400,10 @@ blemesh_on_sync(void)
         return;
     }
 
+#if (MYNEWT_VAL(BLE_MESH_SHELL))
+    shell_register_default_module("mesh");
+#endif
+
     console_printf("Mesh initialized\n");
 }
 
@@ -319,6 +423,7 @@ main(void)
     hal_gpio_init_out(LED_2, 0);
 
     bt_mesh_register_gatt();
+    health_pub_init();
 
     while (1) {
         os_eventq_run(os_eventq_dflt_get());

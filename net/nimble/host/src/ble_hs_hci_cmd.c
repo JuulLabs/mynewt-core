@@ -66,7 +66,7 @@ ble_hs_hci_cmd_write_hdr(uint8_t ogf, uint16_t ocf, uint8_t len, void *buf)
     u8ptr[2] = len;
 }
 
-int
+static int
 ble_hs_hci_cmd_send(uint16_t opcode, uint8_t len, const void *cmddata)
 {
     uint8_t *buf;
@@ -173,6 +173,12 @@ ble_hs_hci_cmd_body_le_set_adv_params(const struct hci_adv_params *adv,
         return -1;
     }
 
+/* When build with nimBLE controller we know it is BT5 compliant so no need
+ * to limit non-connectable advertising interval
+ */
+#if MYNEWT_VAL(BLE_DEVICE)
+    itvl = BLE_HCI_ADV_ITVL_MIN;
+#else
     /* Make sure interval is valid for advertising type. */
     if ((adv->adv_type == BLE_HCI_ADV_TYPE_ADV_NONCONN_IND) ||
         (adv->adv_type == BLE_HCI_ADV_TYPE_ADV_SCAN_IND)) {
@@ -180,6 +186,7 @@ ble_hs_hci_cmd_body_le_set_adv_params(const struct hci_adv_params *adv,
     } else {
         itvl = BLE_HCI_ADV_ITVL_MIN;
     }
+#endif
 
     /* Do not check if high duty-cycle directed */
     if (adv->adv_type != BLE_HCI_ADV_TYPE_ADV_DIRECT_IND_HD) {
@@ -532,6 +539,51 @@ ble_hs_hci_cmd_reset(void)
                                0, NULL);
 }
 
+/** Set controller to host flow control (OGF 0x03, OCF 0x0031). */
+int
+ble_hs_hci_cmd_tx_set_ctlr_to_host_fc(uint8_t fc_enable)
+{
+    if (fc_enable > BLE_HCI_CTLR_TO_HOST_FC_BOTH) {
+        return BLE_HS_EINVAL;
+    }
+
+    return ble_hs_hci_cmd_tx_empty_ack(
+        BLE_HCI_OP(BLE_HCI_OGF_CTLR_BASEBAND,
+                   BLE_HCI_OCF_CB_SET_CTLR_TO_HOST_FC),
+        &fc_enable, 1);
+}
+
+/* Host buffer size (OGF 0x03, OCF 0x0033). */
+int
+ble_hs_hci_cmd_tx_host_buf_size(const struct hci_host_buf_size *cmd)
+{
+    uint8_t buf[BLE_HCI_HOST_BUF_SIZE_LEN];
+
+    put_le16(buf + 0, cmd->acl_pkt_len);
+    buf[2] = cmd->sync_pkt_len;
+    put_le16(buf + 3, cmd->num_acl_pkts);
+    put_le16(buf + 5, cmd->num_sync_pkts);
+
+    return ble_hs_hci_cmd_tx_empty_ack(
+        BLE_HCI_OP(BLE_HCI_OGF_CTLR_BASEBAND, BLE_HCI_OCF_CB_HOST_BUF_SIZE),
+        buf, sizeof buf);
+}
+
+/* Host number of completed packets (OGF 0x03, OCF 0x0035). */
+int
+ble_hs_hci_cmd_build_host_num_comp_pkts_entry(
+    const struct hci_host_num_comp_pkts_entry *entry,
+    uint8_t *dst, int dst_len)
+{
+    if (dst_len < BLE_HCI_HOST_NUM_COMP_PKTS_ENT_LEN) {
+        return BLE_HS_EMSGSIZE;
+    }
+
+    put_le16(dst + 0, entry->conn_handle);
+    put_le16(dst + 2, entry->num_pkts);
+
+    return 0;
+}
 
 /**
  * Read the transmit power level used for LE advertising channel packets.
@@ -1134,7 +1186,7 @@ ble_hs_hci_cmd_build_le_enh_recv_test(uint8_t rx_chan, uint8_t phy,
                                       uint8_t mod_idx,
                                       uint8_t *dst, uint16_t dst_len)
 {
-    BLE_HS_DBG_ASSERT(dst_len >= BLE_HCI_LE_ENH_RCVR_TEST_LEN);
+    BLE_HS_DBG_ASSERT(dst_len >= BLE_HCI_LE_ENH_RX_TEST_LEN);
 
     return ble_hs_hci_cmd_body_le_enhanced_recv_test(rx_chan, phy, mod_idx, dst);
 }
@@ -1169,7 +1221,7 @@ ble_hs_hci_cmd_build_le_enh_trans_test(uint8_t tx_chan, uint8_t test_data_len,
                                        uint8_t packet_payload_idx, uint8_t phy,
                                        uint8_t *dst, uint16_t dst_len)
 {
-    BLE_HS_DBG_ASSERT(dst_len >= BLE_HCI_LE_ENH_TRANS_TEST_LEN);
+    BLE_HS_DBG_ASSERT(dst_len >= BLE_HCI_LE_ENH_TX_TEST_LEN);
 
     return ble_hs_hci_cmd_body_le_enhanced_trans_test(tx_chan, test_data_len,
                                                       packet_payload_idx,
@@ -1471,8 +1523,8 @@ ble_hs_hci_cmd_build_le_ext_adv_set_random_addr(uint8_t handle,
 
 int
 ble_hs_hci_cmd_build_le_ext_adv_data(uint8_t handle, uint8_t operation,
-                                     uint8_t frag_pref,
-                                     const uint8_t *data, uint8_t data_len,
+                                     uint8_t frag_pref, struct os_mbuf *data,
+                                     uint8_t data_len,
                                      uint8_t *cmd, int cmd_len)
 {
     BLE_HS_DBG_ASSERT(cmd_len >= 4 + data_len);
@@ -1481,24 +1533,7 @@ ble_hs_hci_cmd_build_le_ext_adv_data(uint8_t handle, uint8_t operation,
     cmd[1] = operation;
     cmd[2] = frag_pref;
     cmd[3] = data_len;
-    memcpy(cmd + 4, data, data_len);
-
-    return 0;
-}
-
-int
-ble_hs_hci_cmd_build_le_ext_adv_scan_rsp(uint8_t handle, uint8_t operation,
-                                         uint8_t frag_pref,
-                                         const uint8_t *data, uint8_t data_len,
-                                         uint8_t *cmd, int cmd_len)
-{
-    BLE_HS_DBG_ASSERT(cmd_len >= 4 + data_len);
-
-    cmd[0] = handle;
-    cmd[1] = operation;
-    cmd[2] = frag_pref;
-    cmd[3] = data_len;
-    memcpy(cmd + 4, data, data_len);
+    os_mbuf_copydata(data, 0, data_len, cmd + 4);
 
     return 0;
 }
@@ -1557,6 +1592,16 @@ ble_hs_hci_cmd_build_le_ext_adv_params(uint8_t handle,
     cmd[22] = params->secondary_phy;
     cmd[23] = params->sid;
     cmd[24] = params->scan_req_notif;
+
+    return 0;
+}
+int
+ble_hs_hci_cmd_build_le_ext_adv_remove(uint8_t handle,
+                                       uint8_t *cmd, int cmd_len)
+{
+    BLE_HS_DBG_ASSERT(cmd_len >= BLE_HCI_LE_REMOVE_ADV_SET_LEN);
+
+    cmd[0] = handle;
 
     return 0;
 }

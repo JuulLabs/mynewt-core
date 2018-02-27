@@ -33,6 +33,12 @@ pkg.deps:
     - net/nimble/host  
     - crypto/tinycrypt
 
+pkg.deps.BLE_MESH_SHELL:
+    - sys/shell
+
 pkg.req_apis:
     - log
     - stats
+
+pkg.init:
+    ble_mesh_shell_init: 1000

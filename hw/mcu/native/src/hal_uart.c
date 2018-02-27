@@ -30,6 +30,9 @@
 #ifdef MN_OSX
 #include <util.h>
 #endif
+#ifdef MN_FreeBSD
+#include <libutil.h>
+#endif
 #include <ctype.h>
 #include <stdio.h>
 #include <fcntl.h>
@@ -50,7 +53,6 @@
 #define UART_MAX_BYTES_PER_POLL	64
 #endif
 #define UART_POLLER_STACK_SZ	OS_STACK_ALIGN(1024)
-#define UART_POLLER_PRIO	0
 
 struct uart {
     int u_open;
@@ -260,7 +262,7 @@ uart_pty_set_attr(int fd)
 
     tios.c_cflag &= ~(CSIZE | CSTOPB | PARENB);
     tios.c_cflag |= CS8 | CREAD;
-    tios.c_iflag = IGNPAR | IXON;
+    tios.c_iflag = IGNPAR;
     tios.c_oflag = 0;
     tios.c_lflag = 0;
     if (tcsetattr(fd, TCSAFLUSH, &tios) < 0) {
@@ -390,7 +392,7 @@ hal_uart_init_cbs(int port, hal_uart_tx_char tx_func, hal_uart_tx_done tx_done,
     if (!uart_poller_running) {
         uart_poller_running = 1;
         rc = os_task_init(&uart_poller_task, "uartpoll", uart_poller, NULL,
-          UART_POLLER_PRIO, OS_WAIT_FOREVER, uart_poller_stack,
+          MYNEWT_VAL(MCU_UART_POLLER_PRIO), OS_WAIT_FOREVER, uart_poller_stack,
           UART_POLLER_STACK_SZ);
         assert(rc == 0);
     }

@@ -20,6 +20,7 @@
 #ifndef __SENSOR_H__
 #define __SENSOR_H__
 
+#include <string.h>
 #include "os/os.h"
 #include "os/os_dev.h"
 #include "syscfg/syscfg.h"
@@ -97,6 +98,13 @@ typedef enum {
     /* A selector, describes all sensors */
     SENSOR_TYPE_ALL                  = 0xFFFFFFFF
 } sensor_type_t;
+
+typedef enum {
+    /* Accelerometer double tap event */
+    SENSOR_EVENT_TYPE_DOUBLE_TAP     = (1 << 0),
+    /* Accelerometer single tap event */
+    SENSOR_EVENT_TYPE_SINGLE_TAP     = (1 << 1),
+} sensor_event_type_t;
 
 
 /**
@@ -212,6 +220,16 @@ typedef int
                              sensor_data_t *, void *);
 
 /**
+ * Callback for event notifications.
+ *
+ * @param The sensor that observed the event
+ * @param The opaque argument provided during registration
+ * @param The sensor event type that was observed
+ */
+typedef int
+(*sensor_notifier_func_t)(struct sensor *, void *, sensor_event_type_t);
+
+/**
  *
  */
 struct sensor_listener {
@@ -231,6 +249,30 @@ struct sensor_listener {
      * contained within the sensor object.
      */
     SLIST_ENTRY(sensor_listener) sl_next;
+};
+
+/**
+ * Registration for sensor event notifications
+ */
+struct sensor_notifier {
+    /* The type of sensor event to be notified on, this is interpreted as a
+     * mask, and this notifier is called for all event types on this
+     * sensor that match the mask.
+     */
+    sensor_event_type_t sn_sensor_event_type;
+
+    /* Sensor event notification handler function, called when a matching
+     * event occurred.
+     */
+    sensor_notifier_func_t sn_func;
+
+    /* Opaque argument for the sensor event notification handler function. */
+    void *sn_arg;
+
+    /* Next item in the sensor notifier list. The head of this list is
+     * contained within the sensor object.
+     */
+    SLIST_ENTRY(sensor_notifier) sn_next;
 };
 
 /**
@@ -266,17 +308,19 @@ struct sensor_type_traits {
     oc_resource_t *stt_oic_res;
 #endif
 
+    struct sensor *stt_sensor;
+
     /* Next item in the sensor traits list.  The head of this list is
      * contained within the sensor object.
      */
     SLIST_ENTRY(sensor_type_traits) stt_next;
 };
 
-struct sensor_read_ev_ctx {
+struct sensor_notify_ev_ctx {
     /* The sensor for which the ev cb should be called */
-    struct sensor *srec_sensor;
-    /* The sensor type */
-    sensor_type_t srec_type;
+    struct sensor * snec_sensor;
+    /* The event type */
+    sensor_event_type_t snec_evtype;
 };
 
 /**
@@ -333,17 +377,74 @@ typedef int (*sensor_set_config_func_t)(struct sensor *, void *);
 typedef int (*sensor_set_trigger_thresh_t)(struct sensor *, sensor_type_t,
                                            struct sensor_type_traits *stt);
 
+/**
+ * Clear the high/low threshold values for a specific sensor for the sensor
+ * type.
+ *
+ * @param ptr to the sensor
+ * @param type of sensor
+ *
+ * @return 0 on success, non-zero error code on failure.
+ */
+typedef int (*sensor_clear_trigger_thresh_t)(struct sensor *, sensor_type_t);
+
+/**
+ * Set the notification expectation for a targeted set of events for the
+ * specific sensor. After this function returns successfully, the implementer
+ * shall post corresponding event notifications to the sensor manager.
+ *
+ * @param The sensor to expect notifications from.
+ * @param The mask of event types to expect notifications from.
+ *
+ * @return 0 on success, non-zero error code on failure.
+ */
+typedef int (*sensor_set_notification_t)(struct sensor *,
+                                         sensor_event_type_t);
+
+/**
+ * Unset the notification expectation for a targeted set of events for the
+ * specific sensor.
+ *
+ * @param The sensor.
+ * @param The mask of event types.
+ *
+ * @return 0 on success, non-zero error code on failure.
+ */
+typedef int (*sensor_unset_notification_t)(struct sensor *,
+                                           sensor_event_type_t);
+
+/**
+ * Let driver handle interrupt in the sensor context
+ *
+ * @param The sensor.
+ * @param Interrupt argument
+ *
+ * @return 0 on success, non-zero error code on failure.
+ */
+typedef int (*sensor_handle_interrupt_t)(struct sensor *);
+
 struct sensor_driver {
     sensor_read_func_t sd_read;
     sensor_get_config_func_t sd_get_config;
     sensor_set_config_func_t sd_set_config;
     sensor_set_trigger_thresh_t sd_set_trigger_thresh;
+    sensor_clear_trigger_thresh_t sd_clear_low_trigger_thresh;
+    sensor_clear_trigger_thresh_t sd_clear_high_trigger_thresh;
+    sensor_set_notification_t sd_set_notification;
+    sensor_unset_notification_t sd_unset_notification;
+    sensor_handle_interrupt_t sd_handle_interrupt;
 };
 
 struct sensor_timestamp {
     struct os_timeval st_ostv;
     struct os_timezone st_ostz;
     uint32_t st_cputime;
+};
+
+struct sensor_int {
+    uint8_t host_pin;
+    uint8_t device_pin;
+    uint8_t active;
 };
 
 struct sensor_itf {
@@ -365,6 +466,11 @@ struct sensor_itf {
 
     /* Sensor interface high int pin */
     uint8_t si_high_pin;
+
+    /* Sensor interface interrupts pins */
+    /* XXX We should probably remove low/high pins and replace it with those
+     */
+    struct sensor_int si_ints[MYNEWT_VAL(SENSOR_MAX_INTERRUPTS_PINS)];
 };
 
 /*
@@ -425,6 +531,11 @@ struct sensor {
      */
     SLIST_HEAD(, sensor_listener) s_listener_list;
 
+    /* A list of notifiers that are registered to receive events from this
+     * sensor
+     */
+    SLIST_HEAD(, sensor_notifier) s_notifier_list;
+
     /* A list of sensor thresholds that are registered */
     SLIST_HEAD(, sensor_type_traits) s_type_traits_list;
 
@@ -451,7 +562,7 @@ void sensor_unlock(struct sensor *);
 int sensor_register_listener(struct sensor *, struct sensor_listener *);
 
 /**
- * Un-register a sensor listener. This allows a calling application to unset
+ * Un-register a sensor listener. This allows a calling application to clear
  * callbacks for a given sensor object.
  *
  * @param The sensor object
@@ -461,6 +572,28 @@ int sensor_register_listener(struct sensor *, struct sensor_listener *);
  */
 
 int sensor_unregister_listener(struct sensor *, struct sensor_listener *);
+
+/**
+ * Register a sensor notifier. This allows a calling application to receive
+ * callbacks any time a requested event is observed.
+ *
+ * @param The sensor to register the notifier on
+ * @param The notifier to register
+ *
+ * @return 0 on success, non-zero error code on failure.
+ */
+int sensor_register_notifier(struct sensor *, struct sensor_notifier *);
+
+/**
+ * Un-register a sensor notifier. This allows a calling application to stop
+ * receiving callbacks for events on the sensor object.
+ *
+ * @param The sensor object to un-register the notifier on
+ * @param The notifier to remove from the notification list
+ *
+ * @return 0 on success, non-zero error code on failure.
+ */
+int sensor_unregister_notifier(struct sensor *, struct sensor_notifier *);
 
 int sensor_read(struct sensor *, sensor_type_t, sensor_data_func_t, void *,
         uint32_t);
@@ -524,13 +657,7 @@ sensor_check_type(struct sensor *sensor, sensor_type_t type)
 static inline int
 sensor_set_interface(struct sensor *sensor, struct sensor_itf *s_itf)
 {
-    sensor->s_itf.si_type = s_itf->si_type;
-    sensor->s_itf.si_num = s_itf->si_num;
-    sensor->s_itf.si_cs_pin = s_itf->si_cs_pin;
-    sensor->s_itf.si_addr = s_itf->si_addr;
-    sensor->s_itf.si_low_pin = s_itf->si_low_pin;
-    sensor->s_itf.si_high_pin = s_itf->si_high_pin;
-
+    memcpy(&sensor->s_itf, s_itf, sizeof(*s_itf));
     return (0);
 }
 
@@ -706,6 +833,28 @@ int
 sensor_set_thresh(char *, struct sensor_type_traits *);
 
 /**
+ * Clears the low threshold for a sensor
+ *
+ * @param name of the sensor
+ * @param sensor type
+ *
+ * @return 0 on success, non-zero on failure
+ */
+int
+sensor_clear_low_thresh(char *, sensor_type_t);
+
+/**
+ * Clears the high threshold for a sensor
+ *
+ * @param name of the sensor
+ * @param sensor type
+ *
+ * @return 0 on success, non-zero on failure
+ */
+int
+sensor_clear_high_thresh(char *, sensor_type_t);
+
+/**
  * Set the watermark thresholds for a sensor
  *
  * @param name of the sensor
@@ -715,6 +864,22 @@ sensor_set_thresh(char *, struct sensor_type_traits *);
  */
 int
 sensor_set_watermark_thresh(char *, struct sensor_type_traits *);
+
+/**
+ * Puts a notification event on the sensor manager evq
+ *
+ * @param notification event context
+ */
+void
+sensor_mgr_put_notify_evt(struct sensor_notify_ev_ctx *);
+
+/**
+ * Puts a interrupt event on the sensor manager evq
+ *
+ * @param interrupt event context
+ */
+void
+sensor_mgr_put_interrupt_evt(struct sensor *);
 
 /**
  * Puts read event on the sensor manager evq

@@ -1,11 +1,9 @@
-#########
 Scheduler
-#########
+=========
 
 Scheduler's job is to maintain the list of tasks and decide which one
 should be running next.
 
-***********
 Description
 ***********
 
@@ -35,9 +33,18 @@ process is called context switch. During context switching the state of
 the CPU (e.g. registers) for the currently *running* task is stored and
 the new task is swapped in.
 
-***
 API
 ***
 
-.. doxygengroup:: OSSched
-    :content-only:
+* :c:func:`os_sched()`
+* :c:func:`os_arch_ctx_sw()`
+* :c:func:`os_sched_ctx_sw_hook()`
+* :c:func:`os_sched_get_current_task()`
+* :c:func:`os_sched_insert()`
+* :c:func:`os_sched_next_task()`
+* :c:func:`os_sched_os_timer_exp()`
+* :c:func:`os_sched_remove()`
+* :c:func:`os_sched_resort()`
+* :c:func:`os_sched_set_current_task()`
+* :c:func:`os_sched_sleep()`
+* :c:func:`os_sched_wakeup()`

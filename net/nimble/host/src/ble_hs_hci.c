@@ -28,7 +28,7 @@
 #include "ble_hs_dbg_priv.h"
 #include "ble_monitor_priv.h"
 
-#define BLE_HCI_CMD_TIMEOUT     (OS_TICKS_PER_SEC)
+#define BLE_HCI_CMD_TIMEOUT     ((OS_TICKS_PER_SEC) * 2)
 
 static struct os_mutex ble_hs_hci_mutex;
 static struct os_sem ble_hs_hci_sem;
@@ -37,6 +37,7 @@ static uint8_t *ble_hs_hci_ack;
 static uint16_t ble_hs_hci_buf_sz;
 static uint8_t ble_hs_hci_max_pkts;
 static uint32_t ble_hs_hci_sup_feat;
+static uint8_t ble_hs_hci_version;
 
 /**
  * The number of available ACL transmit buffers on the controller.  This
@@ -338,7 +339,7 @@ ble_hs_hci_cmd_tx_empty_ack(uint16_t opcode, void *cmd, uint8_t cmd_len)
 void
 ble_hs_hci_rx_ack(uint8_t *ack_ev)
 {
-    if (ble_hs_hci_sem.sem_tokens != 0) {
+    if (os_sem_get_count(&ble_hs_hci_sem) > 0) {
         /* This ack is unexpected; ignore it. */
         ble_hci_trans_buf_free(ack_ev);
         return;
@@ -544,6 +545,18 @@ uint32_t
 ble_hs_hci_get_le_supported_feat(void)
 {
     return ble_hs_hci_sup_feat;
+}
+
+void
+ble_hs_hci_set_hci_version(uint8_t hci_version)
+{
+    ble_hs_hci_version = hci_version;
+}
+
+uint8_t
+ble_hs_hci_get_hci_version(void)
+{
+    return ble_hs_hci_version;
 }
 
 void

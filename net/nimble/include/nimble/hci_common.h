@@ -70,6 +70,9 @@ extern "C" {
 #define BLE_HCI_OCF_CB_SET_EVENT_MASK       (0x0001)
 #define BLE_HCI_OCF_CB_RESET                (0x0003)
 #define BLE_HCI_OCF_CB_READ_TX_PWR          (0x002D)
+#define BLE_HCI_OCF_CB_SET_CTLR_TO_HOST_FC  (0x0031)
+#define BLE_HCI_OCF_CB_HOST_BUF_SIZE        (0x0033)
+#define BLE_HCI_OCF_CB_HOST_NUM_COMP_PKTS   (0x0035)
 #define BLE_HCI_OCF_CB_SET_EVENT_MASK2      (0x0063)
 #define BLE_HCI_OCF_CB_RD_AUTH_PYLD_TMO     (0x007B)
 #define BLE_HCI_OCF_CB_WR_AUTH_PYLD_TMO     (0x007C)
@@ -135,8 +138,8 @@ extern "C" {
 #define BLE_HCI_OCF_LE_RD_PHY                       (0x0030)
 #define BLE_HCI_OCF_LE_SET_DEFAULT_PHY              (0x0031)
 #define BLE_HCI_OCF_LE_SET_PHY                      (0x0032)
-#define BLE_HCI_OCF_LE_ENH_RCVR_TEST                (0x0033)
-#define BLE_HCI_OCF_LE_ENH_TRANS_TEST               (0x0034)
+#define BLE_HCI_OCF_LE_ENH_RX_TEST                  (0x0033)
+#define BLE_HCI_OCF_LE_ENH_TX_TEST                  (0x0034)
 #define BLE_HCI_OCF_LE_SET_ADV_SET_RND_ADDR         (0x0035)
 #define BLE_HCI_OCF_LE_SET_EXT_ADV_PARAM            (0x0036)
 #define BLE_HCI_OCF_LE_SET_EXT_ADV_DATA             (0x0037)
@@ -172,6 +175,21 @@ extern "C" {
 
 /* --- Set event mask (OGF 0x03, OCF 0x0001 --- */
 #define BLE_HCI_SET_EVENT_MASK_LEN          (8)
+
+/* --- Set controller to host flow control (OGF 0x03, OCF 0x0031) --- */
+#define BLE_HCI_CTLR_TO_HOST_FC_LEN         (1)
+
+#define BLE_HCI_CTLR_TO_HOST_FC_OFF         (0)
+#define BLE_HCI_CTLR_TO_HOST_FC_ACL         (1)
+#define BLE_HCI_CTLR_TO_HOST_FC_SYNC        (2)
+#define BLE_HCI_CTLR_TO_HOST_FC_BOTH        (3)
+
+/* --- Host buffer size (OGF 0x03, OCF 0x0033) --- */
+#define BLE_HCI_HOST_BUF_SIZE_LEN           (7)
+
+/* --- Host number of completed packets (OGF 0x03, OCF 0x0035) --- */
+#define BLE_HCI_HOST_NUM_COMP_PKTS_HDR_LEN  (1)
+#define BLE_HCI_HOST_NUM_COMP_PKTS_ENT_LEN  (4)
 
 /* --- Read BD_ADDR (OGF 0x04, OCF 0x0009 --- */
 #define BLE_HCI_IP_RD_BD_ADDR_ACK_PARAM_LEN (6)
@@ -223,9 +241,10 @@ extern "C" {
 #define BLE_HCI_ADV_SCAN_RSP_MASK           (0x0008)
 #define BLE_HCI_ADV_LEGACY_MASK             (0x0010)
 
-#define BLE_HCI_ADV_COMPLETED               (0x00)
-#define BLE_HCI_ADV_INCOMPLETE              (0x01)
-#define BLE_HCI_ADV_CORRUPTED               (0x10)
+#define BLE_HCI_ADV_DATA_STATUS_COMPLETE    (0x0000)
+#define BLE_HCI_ADV_DATA_STATUS_INCOMPLETE  (0x0020)
+#define BLE_HCI_ADV_DATA_STATUS_TRUNCATED   (0x0040)
+#define BLE_HCI_ADV_DATA_STATUS_MASK        (0x0060)
 
 /* Own address types */
 #define BLE_HCI_ADV_OWN_ADDR_PUBLIC         (0)
@@ -402,7 +421,7 @@ extern "C" {
 #define BLE_HCI_SET_DATALEN_TX_OCTETS_MIN   (0x001b)
 #define BLE_HCI_SET_DATALEN_TX_OCTETS_MAX   (0x00fb)
 #define BLE_HCI_SET_DATALEN_TX_TIME_MIN     (0x0148)
-#define BLE_HCI_SET_DATALEN_TX_TIME_MAX     (0x0848)
+#define BLE_HCI_SET_DATALEN_TX_TIME_MAX     (0x4290)
 
 /* --- LE read suggested default data length (OCF 0x0023) */
 #define BLE_HCI_RD_SUGG_DATALEN_RSPLEN      (4)
@@ -460,13 +479,13 @@ extern "C" {
 #define BLE_HCI_LE_PHY_CODED_S8_PREF                (0x0002)
 
 /* --- LE enhanced receiver test (OCF 0x0033) */
-#define BLE_HCI_LE_ENH_RCVR_TEST_LEN                (3)
+#define BLE_HCI_LE_ENH_RX_TEST_LEN                  (3)
 #define BLE_HCI_LE_PHY_1M                           (1)
 #define BLE_HCI_LE_PHY_2M                           (2)
 #define BLE_HCI_LE_PHY_CODED                        (3)
 
 /* --- LE enhanced transmitter test (OCF 0x0034) */
-#define BLE_HCI_LE_ENH_TRANS_TEST_LEN               (4)
+#define BLE_HCI_LE_ENH_TX_TEST_LEN                  (4)
 #define BLE_HCI_LE_PHY_CODED_S8                     (3)
 #define BLE_HCI_LE_PHY_CODED_S2                     (4)
 
@@ -491,6 +510,9 @@ extern "C" {
 #define BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY_NONCONN  (0x0010)
 
 /* --- LE set extended advertising data (OCF 0x0037) */
+#define BLE_HCI_MAX_EXT_ADV_DATA_LEN                (251)
+#define BLE_HCI_SET_EXT_ADV_DATA_HDR_LEN            (4)
+
 #define BLE_HCI_LE_SET_EXT_ADV_DATA_LEN             BLE_HCI_VARIABLE_LEN
 #define BLE_HCI_LE_SET_EXT_ADV_DATA_OPER_INT        (0)
 #define BLE_HCI_LE_SET_EXT_ADV_DATA_OPER_FIRST      (1)
@@ -499,6 +521,9 @@ extern "C" {
 #define BLE_HCI_LE_SET_EXT_ADV_DATA_OPER_UNCHANGED  (4)
 
 /* --- LE set extended scan response data (OCF 0x0038) */
+#define BLE_HCI_MAX_EXT_SCAN_RSP_DATA_LEN           (251)
+#define BLE_HCI_SET_EXT_SCAN_RSP_DATA_HDR_LEN       (4)
+
 #define BLE_HCI_LE_SET_EXT_SCAN_RSP_DATA_LEN        BLE_HCI_VARIABLE_LEN
 #define BLE_HCI_LE_SET_EXT_SCAN_RSP_DATA_OPER_INT        (0)
 #define BLE_HCI_LE_SET_EXT_SCAN_RSP_DATA_OPER_FIRST      (1)
@@ -779,6 +804,23 @@ extern "C" {
 #define BLE_HCI_LE_ENH_CONN_COMPLETE_LEN    (31)
 
 /*--- Shared data structures ---*/
+
+/* Host buffer size (OGF=0x03, OCF=0x0033) */
+struct hci_host_buf_size
+{
+    uint16_t acl_pkt_len;
+    uint8_t sync_pkt_len;
+    uint16_t num_acl_pkts;
+    uint16_t num_sync_pkts;
+};
+
+/* Host number of completed packets (OGF=0x03, OCF=0x0035) */
+struct hci_host_num_comp_pkts_entry
+{
+    uint16_t conn_handle;
+    uint16_t num_pkts;
+};
+
 /* Read local version information (OGF=0x0004, OCF=0x0001) */
 struct hci_loc_ver_info
 {
@@ -892,7 +934,7 @@ struct hci_ext_adv_params
     uint8_t peer_addr_type;
     uint8_t peer_addr[6];
     uint8_t filter_policy;
-    uint8_t tx_power;
+    int8_t tx_power;
     uint8_t primary_phy;
     uint8_t max_skip;
     uint8_t secondary_phy;
@@ -1044,6 +1086,16 @@ struct hci_le_phy_upd_complete
     uint16_t connection_handle;
     uint8_t tx_phy;
     uint8_t rx_phy;
+};
+
+/* LE Advertising Set Terminated subevent*/
+struct hci_le_adv_set_terminated
+{
+    uint8_t subevent_code;
+    uint8_t status;
+    uint8_t adv_handle;
+    uint16_t conn_handle;
+    uint8_t completed_events;
 };
 
 #define BLE_HCI_DATA_HDR_SZ                 4

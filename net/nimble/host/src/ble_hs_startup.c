@@ -24,6 +24,33 @@
 #include "ble_hs_priv.h"
 
 static int
+ble_hs_startup_le_read_local_ver_tx(void)
+{
+    uint8_t ack_params[BLE_HCI_RD_LOC_VER_INFO_RSPLEN];
+    uint8_t ack_params_len;
+    uint8_t hci_version;
+    int rc;
+
+    rc = ble_hs_hci_cmd_tx(BLE_HCI_OP(BLE_HCI_OGF_INFO_PARAMS,
+                                      BLE_HCI_OCF_IP_RD_LOCAL_VER),
+                           NULL,0, ack_params, sizeof ack_params,
+                           &ack_params_len);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (ack_params_len != BLE_HCI_RD_LOC_VER_INFO_RSPLEN) {
+        return BLE_HS_ECONTROLLER;
+    }
+
+    /* For now we are interested only in HCI Version */
+    hci_version = ack_params[0];
+    ble_hs_hci_set_hci_version(hci_version);
+
+    return 0;
+}
+
+static int
 ble_hs_startup_le_read_sup_f_tx(void)
 {
     uint8_t ack_params[BLE_HCI_RD_LOC_SUPP_FEAT_RSPLEN];
@@ -200,9 +227,10 @@ ble_hs_startup_set_evmask_tx(void)
      *     0x0000000000000080 Encryption Change Event
      *     0x0000000000008000 Hardware Error Event
      *     0x0000000002000000 Data Buffer Overflow Event
+     *     0x0000800000000000 Encryption Key Refresh Complete Event
      *     0x2000000000000000 LE Meta-Event
      */
-    ble_hs_hci_cmd_build_set_event_mask(0x2000000002008090, buf, sizeof buf);
+    ble_hs_hci_cmd_build_set_event_mask(0x2000800002008090, buf, sizeof buf);
     rc = ble_hs_hci_cmd_tx_empty_ack(BLE_HCI_OP(BLE_HCI_OGF_CTLR_BASEBAND,
                                                 BLE_HCI_OCF_CB_SET_EVENT_MASK),
                                      buf, sizeof(buf));
@@ -250,6 +278,11 @@ ble_hs_startup_go(void)
         return rc;
     }
 
+    rc = ble_hs_startup_le_read_local_ver_tx();
+    if (rc != 0) {
+        return rc;
+    }
+
     /* XXX: Read local supported commands. */
     /* XXX: Read local supported features. */
 
@@ -279,6 +312,9 @@ ble_hs_startup_go(void)
     }
 
     ble_hs_pvcy_set_our_irk(NULL);
+
+    /* If flow control is enabled, configure the controller to use it. */
+    ble_hs_flow_startup();
 
     return 0;
 }

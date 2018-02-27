@@ -24,13 +24,6 @@
 
 #include <assert.h>
 
-/**
- * @addtogroup OSKernel
- * @{
- *   @defgroup OSSched Scheduler
- *   @{
- */
-
 struct os_task_list g_os_run_list = TAILQ_HEAD_INITIALIZER(g_os_run_list);
 struct os_task_list g_os_sleep_list = TAILQ_HEAD_INITIALIZER(g_os_sleep_list);
 
@@ -84,6 +77,15 @@ err:
 void
 os_sched_ctx_sw_hook(struct os_task *next_t)
 {
+#if MYNEWT_VAL(OS_CTX_SW_STACK_CHECK)
+    os_stack_t *top;
+    int i;
+
+    top = g_current_task->t_stacktop - g_current_task->t_stacksize;
+    for (i = 0; i < MYNEWT_VAL(OS_CTX_SW_STACK_GUARD); i++) {
+        assert(top[i] == OS_STACK_PATTERN);
+    }
+#endif
     os_trace_task_start_exec(next_t->t_taskid);
     next_t->t_ctx_sw_cnt++;
     g_current_task->t_run_time += g_os_time - g_os_last_ctx_sw_time;
@@ -120,15 +122,6 @@ os_sched_set_current_task(struct os_task *t)
     g_current_task = t;
 }
 
-/**
- * os sched
- *
- * Performs a context switch. When called, it will either find the highest
- * priority task ready to run if next_t is NULL (i.e. the head of the os run
- * list) or will schedule next_t as the task to run.
- *
- * @param next_t Task to run
- */
 void
 os_sched(struct os_task *next_t)
 {
@@ -362,8 +355,3 @@ os_sched_resort(struct os_task *t)
         os_sched_insert(t);
     }
 }
-
-/**
- *   @} OSSched
- * @} OSKernel
- */

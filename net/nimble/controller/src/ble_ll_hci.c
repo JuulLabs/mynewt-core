@@ -34,6 +34,10 @@
 #include "controller/ble_ll_resolv.h"
 #include "ble_ll_conn_priv.h"
 
+#if MYNEWT_VAL(BLE_LL_DIRECT_TEST_MODE) == 1
+#include <ble_ll_dtm_priv.h>
+#endif
+
 static void ble_ll_hci_cmd_proc(struct os_event *ev);
 
 /* OS event to enqueue command */
@@ -609,7 +613,7 @@ ble_ll_adv_rd_max_adv_data_len(uint8_t *rspbuf, uint8_t *rsplen)
 static int
 ble_ll_adv_rd_sup_adv_sets(uint8_t *rspbuf, uint8_t *rsplen)
 {
-    rspbuf[0] = BLE_LL_ADV_INSTANCES;
+    rspbuf[0] = BLE_ADV_INSTANCES;
     *rsplen = BLE_HCI_RD_NR_SUP_ADV_SETS;
     return BLE_ERR_SUCCESS;
 }
@@ -678,6 +682,13 @@ ble_ll_hci_le_cmd_proc(uint8_t *cmdbuf, uint16_t ocf, uint8_t *rsplen)
         break;
     case BLE_HCI_OCF_LE_SET_RAND_ADDR:
         rc = ble_ll_set_random_addr(cmdbuf);
+#if MYNEWT_VAL(BLE_EXT_ADV)
+        if (rc != BLE_ERR_SUCCESS) {
+            break;
+        }
+        /* For instance 0 we need same address */
+        rc = ble_ll_adv_set_random_addr(cmdbuf, 0);
+#endif
         break;
     case BLE_HCI_OCF_LE_SET_ADV_PARAMS:
         rc = ble_ll_adv_set_adv_params(cmdbuf);
@@ -851,6 +862,23 @@ ble_ll_hci_le_cmd_proc(uint8_t *cmdbuf, uint16_t ocf, uint8_t *rsplen)
         break;
     case BLE_HCI_OCF_LE_SET_PHY:
         rc = ble_ll_conn_hci_le_set_phy(cmdbuf);
+        break;
+#endif
+#if MYNEWT_VAL(BLE_LL_DIRECT_TEST_MODE) == 1
+    case BLE_HCI_OCF_LE_TX_TEST:
+        rc = ble_ll_dtm_tx_test(cmdbuf, false);
+        break;
+    case BLE_HCI_OCF_LE_RX_TEST:
+        rc = ble_ll_dtm_rx_test(cmdbuf, false);
+        break;
+    case BLE_HCI_OCF_LE_TEST_END:
+        rc = ble_ll_dtm_end_test(cmdbuf, rspbuf, rsplen);
+        break;
+    case BLE_HCI_OCF_LE_ENH_RX_TEST:
+        rc = ble_ll_dtm_rx_test(cmdbuf, true);
+        break;
+    case BLE_HCI_OCF_LE_ENH_TX_TEST:
+        rc = ble_ll_dtm_tx_test(cmdbuf, true);
         break;
 #endif
     default:

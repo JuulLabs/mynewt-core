@@ -78,6 +78,20 @@ extern uint32_t g_nrf_irk_list[];
 #define NRF_TX_PWR_MAX_DBM      (4)
 #define NRF_TX_PWR_MIN_DBM      (-40)
 
+/* NRF_RADIO->PCNF0 configuration values */
+#define NRF_PCNF0               (NRF_LFLEN_BITS << RADIO_PCNF0_LFLEN_Pos) | \
+                                (RADIO_PCNF0_S1INCL_Msk) | \
+                                (NRF_S0LEN << RADIO_PCNF0_S0LEN_Pos) | \
+                                (NRF_S1LEN_BITS << RADIO_PCNF0_S1LEN_Pos)
+#define NRF_PCNF0_1M            (NRF_PCNF0) | \
+                                (RADIO_PCNF0_PLEN_8bit << RADIO_PCNF0_PLEN_Pos)
+#define NRF_PCNF0_2M            (NRF_PCNF0) | \
+                                (RADIO_PCNF0_PLEN_16bit << RADIO_PCNF0_PLEN_Pos)
+#define NRF_PCNF0_CODED         (NRF_PCNF0) | \
+                                (RADIO_PCNF0_PLEN_LongRange << RADIO_PCNF0_PLEN_Pos) | \
+                                (NRF_CILEN_BITS << RADIO_PCNF0_CILEN_Pos) | \
+                                (NRF_TERMLEN_BITS << RADIO_PCNF0_TERMLEN_Pos)
+
 /* BLE PHY data structure */
 struct ble_phy_obj
 {
@@ -86,6 +100,7 @@ struct ble_phy_obj
     uint8_t phy_chan;
     uint8_t phy_state;
     uint8_t phy_transition;
+    uint8_t phy_transition_late;
     uint8_t phy_rx_started;
     uint8_t phy_encrypted;
     uint8_t phy_privacy;
@@ -93,10 +108,8 @@ struct ble_phy_obj
     uint8_t phy_txtorx_phy_mode;
     uint8_t phy_cur_phy_mode;
     uint8_t phy_bcc_offset;
-    uint16_t phy_mode_pkt_start_off[BLE_PHY_NUM_MODE];
     uint32_t phy_aar_scratch;
     uint32_t phy_access_address;
-    uint32_t phy_pcnf0;
     struct ble_mbuf_hdr rxhdr;
     void *txend_arg;
     ble_phy_tx_end_func txend_cb;
@@ -112,6 +125,19 @@ static uint32_t g_ble_phy_rx_buf[(BLE_PHY_MAX_PDU_LEN + 3) / 4];
 #if (MYNEWT_VAL(BLE_LL_CFG_FEAT_LE_ENCRYPTION) == 1)
 /* Make sure word-aligned for faster copies */
 static uint32_t g_ble_phy_enc_buf[(BLE_PHY_MAX_PDU_LEN + 3) / 4];
+#endif
+
+/* RF center frequency for each channel index (offset from 2400 MHz) */
+static const uint8_t g_ble_phy_chan_freq[BLE_PHY_NUM_CHANS] = {
+     4,  6,  8, 10, 12, 14, 16, 18, 20, 22, /* 0-9 */
+    24, 28, 30, 32, 34, 36, 38, 40, 42, 44, /* 10-19 */
+    46, 48, 50, 52, 54, 56, 58, 60, 62, 64, /* 20-29 */
+    66, 68, 70, 72, 74, 76, 78,  2, 26, 80, /* 30-39 */
+};
+
+#if (BLE_LL_BT5_PHY_SUPPORTED == 1)
+/* packet start offsets (in usecs) */
+static const uint16_t g_ble_phy_mode_pkt_start_off[BLE_PHY_NUM_MODE] = { 376, 40, 24, 376 };
 #endif
 
 /* Various radio timings */
@@ -222,7 +248,7 @@ struct nrf_ccm_data g_nrf_ccm_data;
 uint32_t
 ble_phy_mode_pdu_start_off(int phy_mode)
 {
-    return g_ble_phy_data.phy_mode_pkt_start_off[phy_mode];
+    return g_ble_phy_mode_pkt_start_off[phy_mode];
 }
 
 void
@@ -245,24 +271,18 @@ ble_phy_mode_set(int cur_phy_mode, int txtorx_phy_mode)
 
     if (cur_phy_mode == BLE_PHY_MODE_1M) {
         NRF_RADIO->MODE = RADIO_MODE_MODE_Ble_1Mbit;
-        NRF_RADIO->PCNF0 = g_ble_phy_data.phy_pcnf0 |
-            (RADIO_PCNF0_PLEN_8bit << RADIO_PCNF0_PLEN_Pos);
+        NRF_RADIO->PCNF0 = NRF_PCNF0_1M;
     } else if (cur_phy_mode == BLE_PHY_MODE_2M) {
         NRF_RADIO->MODE = RADIO_MODE_MODE_Ble_2Mbit;
-        NRF_RADIO->PCNF0 = g_ble_phy_data.phy_pcnf0 |
-            (RADIO_PCNF0_PLEN_16bit << RADIO_PCNF0_PLEN_Pos);
+        NRF_RADIO->PCNF0 = NRF_PCNF0_2M;
+#if MYNEWT_VAL(BLE_LL_CFG_FEAT_LE_CODED_PHY)
     } else if (cur_phy_mode == BLE_PHY_MODE_CODED_125KBPS) {
         NRF_RADIO->MODE = RADIO_MODE_MODE_Ble_LR125Kbit;
-        NRF_RADIO->PCNF0 = g_ble_phy_data.phy_pcnf0 |
-            (RADIO_PCNF0_PLEN_LongRange << RADIO_PCNF0_PLEN_Pos) |
-            (NRF_CILEN_BITS << RADIO_PCNF0_CILEN_Pos) |
-            (NRF_TERMLEN_BITS << RADIO_PCNF0_TERMLEN_Pos);
+        NRF_RADIO->PCNF0 = NRF_PCNF0_CODED;
     } else if (cur_phy_mode == BLE_PHY_MODE_CODED_500KBPS) {
         NRF_RADIO->MODE = RADIO_MODE_MODE_Ble_LR500Kbit;
-        NRF_RADIO->PCNF0 = g_ble_phy_data.phy_pcnf0 |
-            (RADIO_PCNF0_PLEN_LongRange << RADIO_PCNF0_PLEN_Pos) |
-            (NRF_CILEN_BITS << RADIO_PCNF0_CILEN_Pos) |
-            (NRF_TERMLEN_BITS << RADIO_PCNF0_TERMLEN_Pos);
+        NRF_RADIO->PCNF0 = NRF_PCNF0_CODED;
+#endif
     } else {
         assert(0);
     }
@@ -560,10 +580,12 @@ ble_phy_get_ccm_datarate(void)
         return CCM_MODE_DATARATE_1Mbit << CCM_MODE_DATARATE_Pos;
     case BLE_PHY_MODE_2M:
         return CCM_MODE_DATARATE_2Mbit << CCM_MODE_DATARATE_Pos;
+#if MYNEWT_VAL(BLE_LL_CFG_FEAT_LE_CODED_PHY)
     case BLE_PHY_MODE_CODED_125KBPS:
         return CCM_MODE_DATARATE_125Kbps << CCM_MODE_DATARATE_Pos;
     case BLE_PHY_MODE_CODED_500KBPS:
         return CCM_MODE_DATARATE_500Kbps << CCM_MODE_DATARATE_Pos;
+#endif
     }
 
     assert(0);
@@ -762,7 +784,7 @@ ble_phy_get_cur_rx_phy_mode(void)
 
     phy = g_ble_phy_data.phy_cur_phy_mode;
 
-#if BLE_LL_BT5_PHY_SUPPORTED
+#if MYNEWT_VAL(BLE_LL_CFG_FEAT_LE_CODED_PHY)
     /*
      * For Coded PHY mode can be set to either codings since actual coding is
      * set in packet header. However, here we need actual coding of received
@@ -771,14 +793,9 @@ ble_phy_get_cur_rx_phy_mode(void)
      */
     if ((phy == BLE_PHY_MODE_CODED_125KBPS) ||
                                     (phy == BLE_PHY_MODE_CODED_500KBPS)) {
-        /*
-         * XXX CI field value is bits [2:1] in NRF_RADIO->PDUSTAT which is
-         *     available in SDK v14.0 - it's NRF_RADIO->RESERVED7[0] in
-         *     SDK v11.0 so let's use it for now
-         */
-        phy = NRF_RADIO->RESERVED7[0] & 0x06 ?
-                                        BLE_PHY_MODE_CODED_500KBPS :
-                                        BLE_PHY_MODE_CODED_125KBPS;
+        phy = NRF_RADIO->PDUSTAT & RADIO_PDUSTAT_CISTAT_Msk ?
+                                   BLE_PHY_MODE_CODED_500KBPS :
+                                   BLE_PHY_MODE_CODED_125KBPS;
     }
 #endif
 
@@ -874,6 +891,24 @@ ble_phy_rx_end_isr(void)
     NRF_TIMER0->CC[0] = tx_time;
     NRF_TIMER0->EVENTS_COMPARE[0] = 0;
     NRF_PPI->CHENSET = PPI_CHEN_CH20_Msk;
+
+    /*
+     * XXX: Hack warning!
+     *
+     * It may happen (during flash erase) that CPU is stopped for a moment and
+     * TIMER0 already counted past CC[0]. In such case we will be stuck waiting
+     * for TX to start since EVENTS_COMPARE[0] will not happen any time soon.
+     * For now let's set a flag denoting that we are late in RX-TX transition so
+     * ble_phy_tx() will fail - this allows everything to cleanup nicely without
+     * the need for extra handling in many places.
+     *
+     * Note: CC[3] is used only for wfr which we do not need here.
+     */
+    NRF_TIMER0->TASKS_CAPTURE[3] = 1;
+    if (NRF_TIMER0->CC[3] > NRF_TIMER0->CC[0]) {
+        NRF_PPI->CHENCLR = PPI_CHEN_CH20_Msk;
+        g_ble_phy_data.phy_transition_late = 1;
+    }
 
     /*
      * XXX: This is a horrible ugly hack to deal with the RAM S1 byte
@@ -1062,6 +1097,8 @@ ble_phy_isr(void)
         ble_phy_rx_end_isr();
     }
 
+    g_ble_phy_data.phy_transition_late = 0;
+
     /* Ensures IRQ is cleared */
     irq_en = NRF_RADIO->SHORTS;
 
@@ -1145,12 +1182,6 @@ ble_phy_init(void)
 {
     int rc;
 
-    /* Set packet start offsets for various phys */
-    g_ble_phy_data.phy_mode_pkt_start_off[BLE_PHY_MODE_1M] = 40;  /* 40 usecs */
-    g_ble_phy_data.phy_mode_pkt_start_off[BLE_PHY_MODE_2M] = 24;  /* 24 usecs */
-    g_ble_phy_data.phy_mode_pkt_start_off[BLE_PHY_MODE_CODED_125KBPS] = 376;  /* 376 usecs */
-    g_ble_phy_data.phy_mode_pkt_start_off[BLE_PHY_MODE_CODED_500KBPS] = 376;  /* 376 usecs */
-
     /* Default phy to use is 1M */
     g_ble_phy_data.phy_cur_phy_mode = BLE_PHY_MODE_1M;
     g_ble_phy_data.phy_txtorx_phy_mode = BLE_PHY_MODE_1M;
@@ -1184,11 +1215,7 @@ ble_phy_init(void)
 
     /* Set configuration registers */
     NRF_RADIO->MODE = RADIO_MODE_MODE_Ble_1Mbit;
-    g_ble_phy_data.phy_pcnf0 = (NRF_LFLEN_BITS << RADIO_PCNF0_LFLEN_Pos)    |
-                               RADIO_PCNF0_S1INCL_Msk                       |
-                               (NRF_S0LEN << RADIO_PCNF0_S0LEN_Pos)        |
-                               (NRF_S1LEN_BITS << RADIO_PCNF0_S1LEN_Pos);
-    NRF_RADIO->PCNF0 = g_ble_phy_data.phy_pcnf0;
+    NRF_RADIO->PCNF0 = NRF_PCNF0;
 
     /* XXX: should maxlen be 251 for encryption? */
     NRF_RADIO->PCNF1 = NRF_MAXLEN |
@@ -1438,27 +1465,27 @@ ble_phy_rx_set_start_time(uint32_t cputime, uint8_t rem_usecs)
 }
 
 int
-ble_phy_tx(struct os_mbuf *txpdu, uint8_t end_trans)
+ble_phy_tx(ble_phy_tx_pducb_t pducb, void *pducb_arg, uint8_t end_trans)
 {
     int rc;
     uint8_t *dptr;
     uint8_t *pktptr;
     uint8_t payload_len;
+    uint8_t hdr_byte;
     uint32_t state;
     uint32_t shortcuts;
-    struct ble_mbuf_hdr *ble_hdr;
 
-    /* Better have a pdu! */
-    assert(txpdu != NULL);
+    if (g_ble_phy_data.phy_transition_late) {
+        ble_phy_disable();
+        STATS_INC(ble_phy_stats, tx_late);
+        return BLE_PHY_ERR_TX_LATE;
+    }
 
     /*
      * This check is to make sure that the radio is not in a state where
      * it is moving to disabled state. If so, let it get there.
      */
     nrf_wait_disabled();
-
-    ble_hdr = BLE_MBUF_HDR_PTR(txpdu);
-    payload_len = ble_hdr->txinfo.pyld_len;
 
     /*
      * XXX: Although we may not have to do this here, I clear all the PPI
@@ -1473,35 +1500,41 @@ ble_phy_tx(struct os_mbuf *txpdu, uint8_t end_trans)
 #if (MYNEWT_VAL(BLE_LL_CFG_FEAT_LE_ENCRYPTION) == 1)
     if (g_ble_phy_data.phy_encrypted) {
         dptr = (uint8_t *)&g_ble_phy_enc_buf[0];
-        ++dptr;
         pktptr = (uint8_t *)&g_ble_phy_tx_buf[0];
-        NRF_CCM->SHORTS = 1;
+        NRF_CCM->SHORTS = CCM_SHORTS_ENDKSGEN_CRYPT_Msk;
         NRF_CCM->INPTR = (uint32_t)dptr;
         NRF_CCM->OUTPTR = (uint32_t)pktptr;
         NRF_CCM->SCRATCHPTR = (uint32_t)&g_nrf_encrypt_scratchpad[0];
         NRF_CCM->EVENTS_ERROR = 0;
         NRF_CCM->MODE = CCM_MODE_LENGTH_Msk | ble_phy_get_ccm_datarate();
         NRF_CCM->CNFPTR = (uint32_t)&g_nrf_ccm_data;
-        NRF_CCM->TASKS_KSGEN = 1;
     } else {
 #if (MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_PRIVACY) == 1)
         NRF_AAR->IRKPTR = (uint32_t)&g_nrf_irk_list[0];
 #endif
         dptr = (uint8_t *)&g_ble_phy_tx_buf[0];
-        ++dptr;
         pktptr = dptr;
     }
 #else
     dptr = (uint8_t *)&g_ble_phy_tx_buf[0];
-    ++dptr;
     pktptr = dptr;
 #endif
 
+    /* Set PDU payload */
+    payload_len = pducb(&dptr[3], pducb_arg, &hdr_byte);
+
     /* RAM representation has S0, LENGTH and S1 fields. (3 bytes) */
-    dptr[0] = ble_hdr->txinfo.hdr_byte;
+    dptr[0] = hdr_byte;
     dptr[1] = payload_len;
     dptr[2] = 0;
-    dptr += 3;
+
+#if (MYNEWT_VAL(BLE_LL_CFG_FEAT_LE_ENCRYPTION) == 1)
+    /* Start key-stream generation and encryption (via short) */
+    if (g_ble_phy_data.phy_encrypted) {
+        NRF_CCM->TASKS_KSGEN = 1;
+    }
+#endif
+
     NRF_RADIO->PACKETPTR = (uint32_t)pktptr;
 
     /* Clear the ready, end and disabled events */
@@ -1514,18 +1547,15 @@ ble_phy_tx(struct os_mbuf *txpdu, uint8_t end_trans)
     NRF_RADIO->SHORTS = shortcuts;
     NRF_RADIO->INTENSET = RADIO_INTENSET_DISABLED_Msk;
 
-    /* Set transmitted payload length */
-    g_ble_phy_data.phy_tx_pyld_len = payload_len;
-
     /* Set the PHY transition */
     g_ble_phy_data.phy_transition = end_trans;
+
+    /* Set transmitted payload length */
+    g_ble_phy_data.phy_tx_pyld_len = payload_len;
 
     /* If we already started transmitting, abort it! */
     state = NRF_RADIO->STATE;
     if (state != RADIO_STATE_STATE_Tx) {
-        /* Copy data from mbuf into transmit buffer */
-        os_mbuf_copydata(txpdu, ble_hdr->txinfo.offset, payload_len, dptr);
-
         /* Set phy state to transmitting and count packet statistics */
         g_ble_phy_data.phy_state = BLE_PHY_STATE_TX;
         STATS_INC(ble_phy_stats, tx_good);
@@ -1647,8 +1677,6 @@ ble_phy_txpwr_get(void)
 int
 ble_phy_setchan(uint8_t chan, uint32_t access_addr, uint32_t crcinit)
 {
-    uint8_t freq;
-
     assert(chan < BLE_PHY_NUM_CHANS);
 
     /* Check for valid channel range */
@@ -1656,44 +1684,15 @@ ble_phy_setchan(uint8_t chan, uint32_t access_addr, uint32_t crcinit)
         return BLE_PHY_ERR_INV_PARAM;
     }
 
-    /* Get correct frequency */
-    if (chan < BLE_PHY_NUM_DATA_CHANS) {
-        if (chan < 11) {
-            /* Data channel 0 starts at 2404. 0 - 10 are contiguous */
-            freq = (BLE_PHY_DATA_CHAN0_FREQ_MHZ - 2400) +
-                   (BLE_PHY_CHAN_SPACING_MHZ * chan);
-        } else {
-            /* Data channel 11 starts at 2428. 0 - 10 are contiguous */
-            freq = (BLE_PHY_DATA_CHAN0_FREQ_MHZ - 2400) +
-                   (BLE_PHY_CHAN_SPACING_MHZ * (chan + 1));
-        }
+    /* Set current access address */
+    ble_phy_set_access_addr(access_addr);
 
-        /* Set current access address */
-        ble_phy_set_access_addr(access_addr);
-
-        /* Configure crcinit */
-        NRF_RADIO->CRCINIT = crcinit;
-    } else {
-        if (chan == 37) {
-            freq = BLE_PHY_CHAN_SPACING_MHZ;
-        } else if (chan == 38) {
-            /* This advertising channel is at 2426 MHz */
-            freq = BLE_PHY_CHAN_SPACING_MHZ * 13;
-        } else {
-            /* This advertising channel is at 2480 MHz */
-            freq = BLE_PHY_CHAN_SPACING_MHZ * 40;
-        }
-
-        /* Set current access address */
-        ble_phy_set_access_addr(access_addr);
-
-        /* Configure crcinit */
-        NRF_RADIO->CRCINIT = crcinit;
-    }
+    /* Configure crcinit */
+    NRF_RADIO->CRCINIT = crcinit;
 
     /* Set the frequency and the data whitening initial value */
     g_ble_phy_data.phy_chan = chan;
-    NRF_RADIO->FREQUENCY = freq;
+    NRF_RADIO->FREQUENCY = g_ble_phy_chan_freq[chan];
     NRF_RADIO->DATAWHITEIV = chan;
 
     ble_ll_log(BLE_LL_LOG_ID_PHY_SETCHAN, chan, freq, access_addr);
@@ -1824,6 +1823,21 @@ ble_phy_resolv_list_disable(void)
 }
 #endif
 
+#if MYNEWT_VAL(BLE_LL_DIRECT_TEST_MODE) == 1
+void ble_phy_enable_dtm(void)
+{
+    /* When DTM is enabled we need to disable whitening as per
+     * Bluetooth v5.0 Vol 6. Part F. 4.1.1
+     */
+    NRF_RADIO->PCNF1 &= ~RADIO_PCNF1_WHITEEN_Msk;
+}
+
+void ble_phy_disable_dtm(void)
+{
+    /* Enable whitening */
+    NRF_RADIO->PCNF1 |= RADIO_PCNF1_WHITEEN_Msk;
+}
+#endif
 #ifdef BLE_XCVR_RFCLK
 void
 ble_phy_rfclk_enable(void)

@@ -77,7 +77,7 @@ add_observer(oc_resource_t *resource, oc_endpoint_t *endpoint,
         }
         memcpy(o->url, uri, max);
         o->url[max] = 0;
-        memcpy(&o->endpoint, endpoint, sizeof(oc_endpoint_t));
+        memcpy(&o->endpoint, endpoint, oc_endpoint_size(endpoint));
         o->token_len = token_len;
         memcpy(o->token, token, token_len);
         o->last_mid = 0;
@@ -289,6 +289,7 @@ coap_notify_observers(oc_resource_t *resource,
                 coap_set_payload(notification, response_buf->buffer,
                                  OS_MBUF_PKTLEN(response_buf->buffer));
                 coap_set_status_code(notification, response_buf->code);
+                coap_set_header_content_format(notification, APPLICATION_CBOR);
                 if (notification->code < BAD_REQUEST_4_00 &&
                   obs->resource->num_observers) {
                     coap_set_header_observe(notification, (obs->obs_counter)++);

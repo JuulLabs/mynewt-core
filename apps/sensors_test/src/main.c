@@ -46,12 +46,19 @@
 #if MYNEWT_VAL(TSL2561_CLI)
 #include <tsl2561/tsl2561.h>
 #endif
+#if MYNEWT_VAL(BMA253_CLI)
+#include <bma253/bma253.h>
+#endif
 #if MYNEWT_VAL(BME280_CLI)
 #include <bme280/bme280.h>
 #endif
 #if MYNEWT_VAL(BMP280_CLI)
 #include <bmp280/bmp280.h>
 #endif
+#if MYNEWT_VAL(DRV2605_CLI)
+#include <drv2605/drv2605.h>
+#endif
+
 
 #if MYNEWT_VAL(SENSOR_OIC)
 #include <oic/oc_api.h>
@@ -279,6 +286,18 @@ sensor_oic_gap_event(struct ble_gap_event *event, void *arg)
         BLEPRPH_LOG(INFO, "\n");
         return 0;
 
+
+    case BLE_GAP_EVENT_DISC_COMPLETE:
+        BLEPRPH_LOG(INFO, "discovery complete; reason=%d\n",
+                    event->disc_complete.reason);
+        return 0;
+
+    case BLE_GAP_EVENT_ADV_COMPLETE:
+        BLEPRPH_LOG(INFO, "advertise complete; reason=%d\n",
+                    event->adv_complete.reason);
+        sensor_oic_advertise();
+        return 0;
+
     case BLE_GAP_EVENT_ENC_CHANGE:
         /* Encryption has been enabled or disabled for this connection. */
         BLEPRPH_LOG(INFO, "encryption change event; status=%d ",
@@ -404,12 +423,20 @@ sensors_dev_shell_init(void)
     bno055_shell_init();
 #endif
 
+#if MYNEWT_VAL(BMA253_CLI)
+    bma253_shell_init();
+#endif
+
 #if MYNEWT_VAL(BME280_CLI)
     bme280_shell_init();
 #endif
 
 #if MYNEWT_VAL(BMP280_CLI)
     bmp280_shell_init();
+#endif
+
+#if MYNEWT_VAL(DRV2605_CLI)
+    drv2605_shell_init();
 #endif
 }
 

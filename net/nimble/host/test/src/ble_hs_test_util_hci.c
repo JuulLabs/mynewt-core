@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 #include "testutil/testutil.h"
 #include "nimble/ble.h"
 #include "nimble/hci_common.h"
@@ -230,6 +249,12 @@ ble_hs_test_util_hci_ack_set_startup(void)
         {
             .opcode = ble_hs_hci_util_opcode_join(BLE_HCI_OGF_CTLR_BASEBAND,
                                                   BLE_HCI_OCF_CB_RESET),
+        },
+        {
+            .opcode = ble_hs_hci_util_opcode_join(
+             BLE_HCI_OGF_INFO_PARAMS, BLE_HCI_OCF_IP_RD_LOCAL_VER),
+            .evt_params = { 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+            .evt_params_len = 8,
         },
         {
             .opcode = ble_hs_hci_util_opcode_join(
@@ -539,7 +564,7 @@ ble_hs_test_util_hci_rx_conn_cancel_evt(void)
     evt.status = BLE_ERR_UNK_CONN_ID;
     evt.role = BLE_HCI_LE_CONN_COMPLETE_ROLE_MASTER;
 
-    rc = ble_gap_rx_conn_complete(&evt);
+    rc = ble_gap_rx_conn_complete(&evt, 0);
     TEST_ASSERT_FATAL(rc == 0);
 }
 

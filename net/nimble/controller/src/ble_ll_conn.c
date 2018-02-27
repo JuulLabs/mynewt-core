@@ -40,7 +40,6 @@
 #include "controller/ble_phy.h"
 #include "controller/ble_hw.h"
 #include "ble_ll_conn_priv.h"
-#include "hal/hal_gpio.h"
 
 #if (BLETEST_THROUGHPUT_TEST == 1)
 extern void bletest_completed_pkt(uint16_t handle);
@@ -1384,7 +1383,7 @@ conn_tx_pdu:
 
     /* Set transmit end callback */
     ble_phy_set_txend_cb(txend_func, connsm);
-    rc = ble_phy_tx(m, end_transition);
+    rc = ble_phy_tx(ble_ll_tx_mbuf_pducb, m, end_transition);
     if (!rc) {
         /* Log transmit on connection state */
         cur_txlen = ble_hdr->txinfo.pyld_len;
@@ -1543,6 +1542,7 @@ ble_ll_conn_event_start_cb(struct ble_ll_sched_item *sch)
 
     if (rc == BLE_LL_SCHED_STATE_DONE) {
         ble_ll_event_send(&connsm->conn_ev_end);
+        ble_phy_disable();
         ble_ll_state_set(BLE_LL_STATE_STANDBY);
         g_ble_ll_conn_cur_sm = NULL;
     }
@@ -2512,10 +2512,17 @@ ble_ll_conn_created(struct ble_ll_conn_sm *connsm, struct ble_mbuf_hdr *rxhdr)
 #if (MYNEWT_VAL(BLE_LL_CFG_FEAT_LE_CSA2) == 1)
             ble_ll_hci_ev_le_csa(connsm);
 #endif
-        }
 
-        /* Initiate features exchange */
-        ble_ll_ctrl_proc_start(connsm, BLE_LL_CTRL_PROC_FEATURE_XCHG);
+            /*
+             * Initiate features exchange
+             *
+             * XXX we do this only as a master as it was observed that sending
+             * LL_SLAVE_FEATURE_REQ after connection breaks some recent iPhone
+             * models; for slave just assume master will initiate features xchg
+             * if it has some additional features to use.
+             */
+            ble_ll_ctrl_proc_start(connsm, BLE_LL_CTRL_PROC_FEATURE_XCHG);
+        }
     }
 
     return rc;
@@ -2721,6 +2728,11 @@ ble_ll_conn_req_pdu_update(struct os_mbuf *m, uint8_t *adva, uint8_t addr_type,
             }
         }
 
+        /*
+         * If peer in on resolving list, we use RPA generated with Local IRK
+         * from resolving list entry. In other case, we need to use our identity
+         * address (see  Core 5.0, Vol 6, Part B, section 6.4).
+         */
         if (rl) {
             hdr |= BLE_ADV_PDU_HDR_TXADD_RAND;
             ble_ll_resolv_gen_priv_addr(rl, 1, dptr);
@@ -2859,7 +2871,7 @@ ble_ll_conn_request_send(uint8_t addr_type, uint8_t *adva, uint16_t txoffset,
     } else {
         ble_phy_set_txend_cb(ble_ll_conn_req_txend_init, NULL);
     }
-    rc = ble_phy_tx(m, end_trans);
+    rc = ble_phy_tx(ble_ll_tx_mbuf_pducb, m, end_trans);
     return rc;
 }
 
@@ -3101,7 +3113,7 @@ ble_ll_init_rx_isr_end(uint8_t *rxbuf, uint8_t crcok,
 
     rc = -1;
     pdu_type = rxbuf[0] & BLE_ADV_PDU_HDR_TYPE_MASK;
-    pyld_len = rxbuf[1] & BLE_ADV_PDU_HDR_LEN_MASK;
+    pyld_len = rxbuf[1];
 
     if (!crcok) {
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
@@ -3782,11 +3794,9 @@ ble_ll_conn_rx_isr_end(uint8_t *rxbuf, struct ble_mbuf_hdr *rxhdr)
                         /*  XXX: TODO need to check with phy update procedure.
                          *  There are limitations if we have started update */
                         rem_bytes = OS_MBUF_PKTLEN(txpdu) - txhdr->txinfo.offset;
-                        if (rem_bytes > connsm->eff_max_tx_octets) {
-                            txhdr->txinfo.pyld_len = connsm->eff_max_tx_octets;
-                        } else {
-                            txhdr->txinfo.pyld_len = rem_bytes;
-                        }
+                        /* Adjust payload for max TX time and octets */
+                        rem_bytes = ble_ll_conn_adjust_pyld_len(connsm, rem_bytes);
+                        txhdr->txinfo.pyld_len = rem_bytes;
                     }
                 }
             }
@@ -4127,6 +4137,13 @@ err_slave_start:
     return 0;
 }
 
+#define MAX_TIME_UNCODED(_maxbytes) \
+        ble_ll_pdu_tx_time_get(_maxbytes + BLE_LL_DATA_MIC_LEN, \
+                               BLE_PHY_MODE_1M);
+#define MAX_TIME_CODED(_maxbytes) \
+        ble_ll_pdu_tx_time_get(_maxbytes + BLE_LL_DATA_MIC_LEN, \
+                               BLE_PHY_MODE_CODED_125KBPS);
+
 /**
  * Called to reset the connection module. When this function is called the
  * scheduler has been stopped and the phy has been disabled. The LL should
@@ -4168,42 +4185,32 @@ ble_ll_conn_module_reset(void)
     }
 
     /* Get the maximum supported PHY PDU size from the PHY */
+    max_phy_pyld = ble_phy_max_data_pdu_pyld();
 
     /* Configure the global LL parameters */
     conn_params = &g_ble_ll_conn_params;
-    max_phy_pyld = ble_phy_max_data_pdu_pyld();
 
-    /* NOTE: this all assumes that the default phy is 1Mbps */
     maxbytes = min(MYNEWT_VAL(BLE_LL_SUPP_MAX_RX_BYTES), max_phy_pyld);
     conn_params->supp_max_rx_octets = maxbytes;
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LE_CODED_PHY)
-    conn_params->supp_max_rx_time =
-        ble_ll_pdu_tx_time_get(maxbytes + BLE_LL_DATA_MIC_LEN,
-                               BLE_PHY_MODE_CODED_125KBPS);
+    conn_params->supp_max_rx_time = MAX_TIME_CODED(maxbytes);
 #else
-    conn_params->supp_max_rx_time =
-        ble_ll_pdu_tx_time_get(maxbytes + BLE_LL_DATA_MIC_LEN, BLE_PHY_MODE_1M);
+    conn_params->supp_max_rx_time = MAX_TIME_UNCODED(maxbytes);
 #endif
 
     maxbytes = min(MYNEWT_VAL(BLE_LL_SUPP_MAX_TX_BYTES), max_phy_pyld);
     conn_params->supp_max_tx_octets = maxbytes;
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LE_CODED_PHY)
-    conn_params->supp_max_tx_time =
-        ble_ll_pdu_tx_time_get(maxbytes + BLE_LL_DATA_MIC_LEN,
-                               BLE_PHY_MODE_CODED_125KBPS);
+    conn_params->supp_max_tx_time = MAX_TIME_CODED(maxbytes);
 #else
-    conn_params->supp_max_tx_time =
-        ble_ll_pdu_tx_time_get(maxbytes + BLE_LL_DATA_MIC_LEN, BLE_PHY_MODE_1M);
+    conn_params->supp_max_tx_time = MAX_TIME_UNCODED(maxbytes);
 #endif
 
     maxbytes = min(MYNEWT_VAL(BLE_LL_CONN_INIT_MAX_TX_BYTES), max_phy_pyld);
     conn_params->conn_init_max_tx_octets = maxbytes;
-    conn_params->conn_init_max_tx_time =
-        ble_ll_pdu_tx_time_get(maxbytes + BLE_LL_DATA_MIC_LEN, BLE_PHY_MODE_1M);
-    conn_params->conn_init_max_tx_time_uncoded =
-        ble_ll_pdu_tx_time_get(maxbytes + BLE_LL_DATA_MIC_LEN, BLE_PHY_MODE_1M);
-    conn_params->conn_init_max_tx_time_coded =
-        ble_ll_pdu_tx_time_get(maxbytes + BLE_LL_DATA_MIC_LEN, BLE_PHY_MODE_CODED_125KBPS);
+    conn_params->conn_init_max_tx_time = MAX_TIME_UNCODED(maxbytes);
+    conn_params->conn_init_max_tx_time_uncoded = MAX_TIME_UNCODED(maxbytes);
+    conn_params->conn_init_max_tx_time_coded = MAX_TIME_CODED(maxbytes);
 
     conn_params->sugg_tx_octets = BLE_LL_CONN_SUPP_BYTES_MIN;
     conn_params->sugg_tx_time = BLE_LL_CONN_SUPP_TIME_MIN;

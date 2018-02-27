@@ -22,7 +22,6 @@
 #include <string.h>
 #include "sysinit/sysinit.h"
 #include "syscfg/syscfg.h"
-#include "bsp/bsp.h"
 #include "stats/stats.h"
 #include "os/os.h"
 #include "console/console.h"
@@ -125,20 +124,20 @@ ble_hs_evq_set(struct os_eventq *evq)
     ble_hs_evq = evq;
 }
 
+#if MYNEWT_VAL(BLE_HS_DEBUG)
 int
 ble_hs_locked_by_cur_task(void)
 {
     struct os_task *owner;
 
-#if MYNEWT_VAL(BLE_HS_DEBUG)
     if (!os_started()) {
         return ble_hs_dbg_mutex_locked;
     }
-#endif
 
     owner = ble_hs_mutex.mu_owner;
     return owner != NULL && owner == os_sched_get_current_task();
 }
+#endif
 
 /**
  * Indicates whether the host's parent task is currently running.
@@ -150,12 +149,13 @@ ble_hs_is_parent_task(void)
            os_sched_get_current_task() == ble_hs_parent_task;
 }
 
+/**
+ * Locks the BLE host mutex.  Nested locks allowed.
+ */
 void
-ble_hs_lock(void)
+ble_hs_lock_nested(void)
 {
     int rc;
-
-    BLE_HS_DBG_ASSERT(!ble_hs_locked_by_cur_task());
 
 #if MYNEWT_VAL(BLE_HS_DEBUG)
     if (!os_started()) {
@@ -168,14 +168,16 @@ ble_hs_lock(void)
     BLE_HS_DBG_ASSERT_EVAL(rc == 0 || rc == OS_NOT_STARTED);
 }
 
+/**
+ * Unlocks the BLE host mutex.  Nested locks allowed.
+ */
 void
-ble_hs_unlock(void)
+ble_hs_unlock_nested(void)
 {
     int rc;
 
 #if MYNEWT_VAL(BLE_HS_DEBUG)
     if (!os_started()) {
-        BLE_HS_DBG_ASSERT(ble_hs_dbg_mutex_locked);
         ble_hs_dbg_mutex_locked = 0;
         return;
     }
@@ -183,6 +185,37 @@ ble_hs_unlock(void)
 
     rc = os_mutex_release(&ble_hs_mutex);
     BLE_HS_DBG_ASSERT_EVAL(rc == 0 || rc == OS_NOT_STARTED);
+}
+
+/**
+ * Locks the BLE host mutex.  Nested locks not allowed.
+ */
+void
+ble_hs_lock(void)
+{
+    BLE_HS_DBG_ASSERT(!ble_hs_locked_by_cur_task());
+#if MYNEWT_VAL(BLE_HS_DEBUG)
+    if (!os_started()) {
+        BLE_HS_DBG_ASSERT(!ble_hs_dbg_mutex_locked);
+    }
+#endif
+
+    ble_hs_lock_nested();
+}
+
+/**
+ * Unlocks the BLE host mutex.  Nested locks not allowed.
+ */
+void
+ble_hs_unlock(void)
+{
+#if MYNEWT_VAL(BLE_HS_DEBUG)
+    if (!os_started()) {
+        BLE_HS_DBG_ASSERT(ble_hs_dbg_mutex_locked);
+    }
+#endif
+
+    ble_hs_unlock_nested();
 }
 
 void
@@ -215,8 +248,7 @@ ble_hs_wakeup_tx_conn(struct ble_hs_conn *conn)
             /* Controller is at capacity.  This packet will be the first to
              * get transmitted next time around.
              */
-            STAILQ_INSERT_HEAD(&conn->bhc_tx_q, OS_MBUF_PKTHDR(om),
-                               omp_next);
+            STAILQ_INSERT_HEAD(&conn->bhc_tx_q, OS_MBUF_PKTHDR(om), omp_next);
             return BLE_HS_EAGAIN;
         }
     }
@@ -306,9 +338,6 @@ ble_hs_sync(void)
     rc = ble_hs_startup_go();
     if (rc == 0) {
         ble_hs_sync_state = BLE_HS_SYNC_STATE_GOOD;
-        if (ble_hs_cfg.sync_cb != NULL) {
-            ble_hs_cfg.sync_cb();
-        }
     } else {
         ble_hs_sync_state = BLE_HS_SYNC_STATE_BAD;
     }
@@ -316,6 +345,16 @@ ble_hs_sync(void)
     ble_hs_timer_sched(BLE_HS_SYNC_RETRY_RATE);
 
     if (rc == 0) {
+        rc = ble_hs_misc_restore_irks();
+        if (rc != 0) {
+            BLE_HS_LOG(INFO, "Failed to restore IRKs from store; status=%d",
+                       rc);
+        }
+
+        if (ble_hs_cfg.sync_cb != NULL) {
+            ble_hs_cfg.sync_cb();
+        }
+
         STATS_INC(ble_hs_stats, sync);
     }
 
@@ -556,9 +595,6 @@ ble_hs_start(void)
 
     ble_hs_sync();
 
-    rc = ble_hs_misc_restore_irks();
-    assert(rc == 0);
-
     return 0;
 }
 
@@ -575,6 +611,11 @@ static int
 ble_hs_rx_data(struct os_mbuf *om, void *arg)
 {
     int rc;
+
+    /* If flow control is enabled, mark this packet with its corresponding
+     * connection handle.
+     */
+    ble_hs_flow_fill_acl_usrhdr(om);
 
     rc = os_mqueue_put(&ble_hs_rx_q, ble_hs_evq, om);
     if (rc != 0) {

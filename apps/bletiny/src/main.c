@@ -722,12 +722,7 @@ bletiny_disc_full_chrs(uint16_t conn_handle)
     }
 
     SLIST_FOREACH(svc, &conn->svcs, next) {
-        if (!svc_is_empty(svc) && !svc->char_disc_sent) {
-            /* Since it might happen that service does not have characteristics
-             * for some reason, lets keep track on services for which we send
-             * characteristic discovery
-             */
-            svc->char_disc_sent = true;
+        if (!svc_is_empty(svc) && SLIST_EMPTY(&svc->chrs)) {
             rc = bletiny_disc_all_chrs(conn_handle, svc->svc.start_handle,
                                        svc->svc.end_handle);
             if (rc != 0) {
@@ -934,14 +929,14 @@ bletiny_decode_event_type(struct ble_gap_ext_disc_desc *desc)
     }
 
     switch(desc->data_status) {
-    case BLE_HCI_ADV_COMPLETED:
-        console_printf("completed");
+    case BLE_HCI_ADV_DATA_STATUS_COMPLETE:
+        console_printf("complete");
         break;
-    case BLE_HCI_ADV_INCOMPLETE:
-        console_printf("incompleted");
+    case BLE_HCI_ADV_DATA_STATUS_INCOMPLETE:
+        console_printf("incomplete");
         break;
-    case BLE_HCI_ADV_CORRUPTED:
-        console_printf("corrupted");
+    case BLE_HCI_ADV_DATA_STATUS_TRUNCATED:
+        console_printf("truncated");
         break;
     default:
         console_printf("reserved %d", desc->data_status);
@@ -1023,18 +1018,6 @@ bletiny_gap_event(struct ble_gap_event *event, void *arg)
 
         return 0;
 
-    case BLE_GAP_EVENT_DISC_COMPLETE:
-        console_printf("scanning finished\n");
-        return 0;
-
-    case BLE_GAP_EVENT_ADV_COMPLETE:
-        console_printf("advertising complete.\n");
-        return 0;
-
-    case BLE_GAP_EVENT_CONN_CANCEL:
-        console_printf("connection procedure cancelled.\n");
-        return 0;
-
     case BLE_GAP_EVENT_CONN_UPDATE:
         console_printf("connection updated; status=%d ",
                        event->conn_update.status);
@@ -1048,7 +1031,7 @@ bletiny_gap_event(struct ble_gap_event *event, void *arg)
         *event->conn_update_req.self_params =
             *event->conn_update_req.peer_params;
         return 0;
-
+ 
     case BLE_GAP_EVENT_PASSKEY_ACTION:
         console_printf("passkey action event; action=%d",
                        event->passkey.params.action);
@@ -1057,6 +1040,16 @@ bletiny_gap_event(struct ble_gap_event *event, void *arg)
                            (unsigned long)event->passkey.params.numcmp);
         }
         console_printf("\n");
+        return 0;
+
+    case BLE_GAP_EVENT_DISC_COMPLETE:
+        console_printf("discovery complete; reason=%d\n",
+                       event->disc_complete.reason);
+        return 0;
+
+    case BLE_GAP_EVENT_ADV_COMPLETE:
+        console_printf("advertise complete; reason=%d\n",
+                       event->adv_complete.reason);
         return 0;
 
     case BLE_GAP_EVENT_ENC_CHANGE:
@@ -1985,9 +1978,7 @@ bletiny_l2cap_send(uint16_t conn_handle, uint16_t idx, uint16_t bytes)
     rc = ble_l2cap_send(coc->chan, sdu_tx);
     if (rc) {
         console_printf("Could not send data rc=%d\n", rc);
-        if (rc == BLE_HS_EBUSY) {
-            os_mbuf_free_chain(sdu_tx);
-        }
+        os_mbuf_free_chain(sdu_tx);
     }
 
     return rc;
