@@ -29,7 +29,7 @@ syscfg.defs:
         value: 1
     BMA253_INT_CFG_ACTIVE:
         description: 'Set 0 for active-low, 1 for active-high'
-        value: 1
+        value: 0
     BMA253_INT_CFG_OUTPUT:
         description: 'Set 0 for push-pull, 1 for open-drain'
         value: 1
@@ -41,7 +41,7 @@ syscfg.defs:
         value: 2
     BMA253_INT_PIN_HOST:
         description: 'Interrupt pin number on host device connected to INT1 on device'
-        value: 20
+        value: 8
     BMA253_INT2_PIN_HOST:
         description: 'Interrupt pin number on host device connected to INT2 on device'
         value: -1
