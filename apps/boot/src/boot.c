@@ -43,6 +43,20 @@ main(void)
     struct boot_rsp rsp;
     int rc;
 
+    // int i = 0;
+    // for(i = 2; i < 32; i++)
+    // {
+    //     NRF_P0->PIN_CNF[i] = 0x4;
+    // }
+
+    // NRF_P0->PIN_CNF[13] = 0x2;
+    // NRF_P0->PIN_CNF[17] = 0x2;
+    // NRF_P0->PIN_CNF[25] = 0x2;
+
+    NRF_P0->PIN_CNF[22] = 0xC;
+
+    NRF_POWER->SYSTEMOFF = 1;
+    while(1);
     hal_bsp_init();
 
 #if MYNEWT_VAL(BOOT_SERIAL)
