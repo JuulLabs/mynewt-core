@@ -76,18 +76,18 @@ static const struct uart_bitbang_conf os_bsp_uart1_cfg = {
  * and is handled outside the SPI routines.
  */
 static const struct nrf52_hal_spi_cfg os_bsp_spi0m_cfg = {
-    .sck_pin      = 23,
-    .mosi_pin     = 24,
-    .miso_pin     = 25,
+    .sck_pin      = MYNEWT_VAL(SPI_0_MASTER_PIN_SCK),
+    .mosi_pin     = MYNEWT_VAL(SPI_0_MASTER_PIN_MOSI),
+    .miso_pin     = MYNEWT_VAL(SPI_0_MASTER_PIN_MISO),
 };
 #endif
 
 #if MYNEWT_VAL(SPI_0_SLAVE)
 static const struct nrf52_hal_spi_cfg os_bsp_spi0s_cfg = {
-    .sck_pin      = 23,
-    .mosi_pin     = 24,
-    .miso_pin     = 25,
-    .ssn_pin      = 22,
+    .sck_pin      = MYNEWT_VAL(SPI_0_SLAVE_PIN_SCK),
+    .mosi_pin     = MYNEWT_VAL(SPI_0_SLAVE_PIN_MOSI),
+    .miso_pin     = MYNEWT_VAL(SPI_0_SLAVE_PIN_MISO),
+    .ss_pin       = MYNEWT_VAL(SPI_0_SLAVE_PIN_SS),
 };
 #endif
 
@@ -181,6 +181,8 @@ hal_bsp_init(void)
 {
     int rc;
 
+    (void)rc;
+
     /* Make sure system clocks have started */
     hal_system_clock_start();
 
@@ -210,13 +212,13 @@ hal_bsp_init(void)
 #endif
 
 #if MYNEWT_VAL(ADC_0)
-rc = os_dev_create((struct os_dev *) &os_bsp_adc0,
-                   "adc0",
-                   OS_DEV_INIT_KERNEL,
-                   OS_DEV_INIT_PRIO_DEFAULT,
-                   nrf52_adc_dev_init,
-                   &os_bsp_adc0_config);
-assert(rc == 0);
+    rc = os_dev_create((struct os_dev *) &os_bsp_adc0,
+                       "adc0",
+                       OS_DEV_INIT_KERNEL,
+                       OS_DEV_INIT_PRIO_DEFAULT,
+                       nrf52_adc_dev_init,
+                       &os_bsp_adc0_config);
+    assert(rc == 0);
 #endif
 
 #if MYNEWT_VAL(PWM_0)

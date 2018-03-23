@@ -32,8 +32,15 @@
 #include "hal/hal_watchdog.h"
 #include "hal/hal_i2c.h"
 #include "mcu/nrf52_hal.h"
+#if MYNEWT_VAL(UART_0) || MYNEWT_VAL(UART_1)
 #include "uart/uart.h"
+#endif
+#if MYNEWT_VAL(UART_0)
 #include "uart_hal/uart_hal.h"
+#endif
+#if MYNEWT_VAL(UART_1)
+#include "uart_bitbang/uart_bitbang.h"
+#endif
 #include "os/os_dev.h"
 #include "bsp.h"
 #if MYNEWT_VAL(ADC_0)
@@ -75,18 +82,18 @@ static const struct uart_bitbang_conf os_bsp_uart1_cfg = {
  * and is handled outside the SPI routines.
  */
 static const struct nrf52_hal_spi_cfg os_bsp_spi0m_cfg = {
-    .sck_pin      = 45,
-    .mosi_pin     = 46,
-    .miso_pin     = 47,
+    .sck_pin      = MYNEWT_VAL(SPI_0_MASTER_PIN_SCK),
+    .mosi_pin     = MYNEWT_VAL(SPI_0_MASTER_PIN_MOSI),
+    .miso_pin     = MYNEWT_VAL(SPI_0_MASTER_PIN_MISO),
 };
 #endif
 
 #if MYNEWT_VAL(SPI_0_SLAVE)
 static const struct nrf52_hal_spi_cfg os_bsp_spi0s_cfg = {
-    .sck_pin      = 45,
-    .mosi_pin     = 46,
-    .miso_pin     = 47,
-    .ss_pin       = 44,
+    .sck_pin      = MYNEWT_VAL(SPI_0_SLAVE_PIN_SCK),
+    .mosi_pin     = MYNEWT_VAL(SPI_0_SLAVE_PIN_MOSI),
+    .miso_pin     = MYNEWT_VAL(SPI_0_SLAVE_PIN_MISO),
+    .ss_pin       = MYNEWT_VAL(SPI_0_SLAVE_PIN_SS),
 };
 #endif
 
@@ -112,7 +119,7 @@ static struct pwm_dev os_bsp_pwm2;
 int pwm2_idx;
 #endif
 #if MYNEWT_VAL(PWM_3)
-static struct pwm_dev os_bsp_pwm2;
+static struct pwm_dev os_bsp_pwm3;
 int pwm3_idx;
 #endif
 #if MYNEWT_VAL(SOFT_PWM)
@@ -121,9 +128,9 @@ static struct pwm_dev os_bsp_spwm;
 
 #if MYNEWT_VAL(I2C_0)
 static const struct nrf52_hal_i2c_cfg hal_i2c0_cfg = {
-    .scl_pin = 27,
-    .sda_pin = 26,
-    .i2c_frequency = 100    /* 100 kHz */
+    .scl_pin = MYNEWT_VAL(I2C_0_PIN_SCL),
+    .sda_pin = MYNEWT_VAL(I2C_0_PIN_SDA),
+    .i2c_frequency = MYNEWT_VAL(I2C_0_FREQ_KHZ),
 };
 #endif
 
@@ -191,6 +198,8 @@ void
 hal_bsp_init(void)
 {
     int rc;
+
+    (void)rc;
 
     /* Make sure system clocks have started */
     hal_system_clock_start();
@@ -263,7 +272,7 @@ assert(rc == 0);
 #if MYNEWT_VAL(PWM_3)
     pwm3_idx = 3;
     rc = os_dev_create((struct os_dev *) &os_bsp_pwm3,
-                       "pwm2",
+                       "pwm3",
                        OS_DEV_INIT_KERNEL,
                        OS_DEV_INIT_PRIO_DEFAULT,
                        nrf52_pwm_dev_init,
@@ -313,3 +322,67 @@ assert(rc == 0);
 #endif
 
 }
+
+#if MYNEWT_VAL(BSP_USE_HAL_SPI)
+void
+bsp_spi_read_buf(uint8_t addr, uint8_t *buf, uint8_t size)
+{
+    int i;
+    uint8_t rxval;
+    NRF_SPI_Type *spi;
+    spi = NRF_SPI0;
+
+    if (size == 0) {
+        return;
+    }
+
+    i = -1;
+    spi->EVENTS_READY = 0;
+    spi->TXD = (uint8_t)addr;
+    while (size != 0) {
+        spi->TXD = 0;
+        while (!spi->EVENTS_READY) {}
+        spi->EVENTS_READY = 0;
+        rxval = (uint8_t)(spi->RXD);
+        if (i >= 0) {
+            buf[i] = rxval;
+        }
+        size -= 1;
+        ++i;
+        if (size == 0) {
+            while (!spi->EVENTS_READY) {}
+            spi->EVENTS_READY = 0;
+            buf[i] = (uint8_t)(spi->RXD);
+        }
+    }
+}
+
+void
+bsp_spi_write_buf(uint8_t addr, uint8_t *buf, uint8_t size)
+{
+    uint8_t i;
+    uint8_t rxval;
+    NRF_SPI_Type *spi;
+
+    if (size == 0) {
+        return;
+    }
+
+    spi = NRF_SPI0;
+
+    spi->EVENTS_READY = 0;
+
+    spi->TXD = (uint8_t)addr;
+    for (i = 0; i < size; ++i) {
+        spi->TXD = buf[i];
+        while (!spi->EVENTS_READY) {}
+        rxval = (uint8_t)(spi->RXD);
+        spi->EVENTS_READY = 0;
+    }
+
+    while (!spi->EVENTS_READY) {}
+    rxval = (uint8_t)(spi->RXD);
+    spi->EVENTS_READY = 0;
+    (void)rxval;
+}
+#endif

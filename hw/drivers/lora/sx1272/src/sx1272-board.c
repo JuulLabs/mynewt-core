@@ -25,15 +25,11 @@ Maintainer: Miguel Luis and Gregory Cristian
 #error "Cannot have both SX1272_HAS_ANT_SW and SX1272_HAS_COMP_ANT_SW set true"
 #endif
 
-#if MYNEWT_VAL(SX1272_HAS_ANT_SW)
-#error "Currently not supported"
-#endif
-
 /*!
  * Flag used to set the RF switch control pins in low power mode when the radio is not active.
  */
 #if (MYNEWT_VAL(SX1272_HAS_ANT_SW) || MYNEWT_VAL(SX1272_HAS_COMP_ANT_SW))
-static bool RadioIsActive = false;
+static bool g_radio_is_active = false;
 #endif
 
 extern DioIrqHandler *DioIrq[];
@@ -68,13 +64,14 @@ const struct Radio_s Radio =
     SX1272SetPublicNetwork
 };
 
-void SX1272IoInit( void )
+void
+SX1272IoInit(void)
 {
     struct hal_spi_settings spi_settings;
     int rc;
 
 #if MYNEWT_VAL(SX1272_HAS_ANT_SW)
-    rc = hal_gpio_init_out(SX1272_RXTX, 1);
+    rc = hal_gpio_init_out(SX1272_RXTX, 0);
     assert(rc == 0);
 #endif
 
@@ -111,54 +108,56 @@ void SX1272IoInit( void )
     assert(rc == 0);
 }
 
-void SX1272IoIrqInit( DioIrqHandler **irqHandlers )
+void
+SX1272IoIrqInit(DioIrqHandler **irqHandlers)
 {
     int rc;
 
     if (irqHandlers[0] != NULL) {
         rc = hal_gpio_irq_init(SX1272_DIO0, irqHandlers[0], NULL,
-                               HAL_GPIO_TRIG_RISING, HAL_GPIO_PULL_NONE);
+                               HAL_GPIO_TRIG_RISING, HAL_GPIO_PULL_DOWN);
         assert(rc == 0);
         hal_gpio_irq_enable(SX1272_DIO0);
     }
 
     if (irqHandlers[1] != NULL) {
         rc = hal_gpio_irq_init(SX1272_DIO1, irqHandlers[1], NULL,
-                               HAL_GPIO_TRIG_RISING, HAL_GPIO_PULL_NONE);
+                               HAL_GPIO_TRIG_RISING, HAL_GPIO_PULL_DOWN);
         assert(rc == 0);
         hal_gpio_irq_enable(SX1272_DIO1);
     }
 
     if (irqHandlers[2] != NULL) {
         rc = hal_gpio_irq_init(SX1272_DIO2, irqHandlers[2], NULL,
-                               HAL_GPIO_TRIG_RISING, HAL_GPIO_PULL_NONE);
+                               HAL_GPIO_TRIG_RISING, HAL_GPIO_PULL_DOWN);
         assert(rc == 0);
         hal_gpio_irq_enable(SX1272_DIO2);
     }
 
     if (irqHandlers[3] != NULL) {
         rc = hal_gpio_irq_init(SX1272_DIO3, irqHandlers[3], NULL,
-                               HAL_GPIO_TRIG_RISING, HAL_GPIO_PULL_NONE);
+                               HAL_GPIO_TRIG_RISING, HAL_GPIO_PULL_DOWN);
         assert(rc == 0);
         hal_gpio_irq_enable(SX1272_DIO3);
     }
 
     if (irqHandlers[4] != NULL) {
         rc = hal_gpio_irq_init(SX1272_DIO4, irqHandlers[4], NULL,
-                               HAL_GPIO_TRIG_RISING, HAL_GPIO_PULL_NONE);
+                               HAL_GPIO_TRIG_RISING, HAL_GPIO_PULL_DOWN);
         assert(rc == 0);
         hal_gpio_irq_enable(SX1272_DIO4);
     }
 
     if (irqHandlers[5] != NULL) {
         rc = hal_gpio_irq_init(SX1272_DIO5, irqHandlers[5], NULL,
-                               HAL_GPIO_TRIG_RISING, HAL_GPIO_PULL_NONE);
+                               HAL_GPIO_TRIG_RISING, HAL_GPIO_PULL_DOWN);
         assert(rc == 0);
         hal_gpio_irq_enable(SX1272_DIO5);
     }
 }
 
-void SX1272IoDeInit( void )
+void
+SX1272IoDeInit(void)
 {
     if (DioIrq[0] != NULL) {
         hal_gpio_irq_release(SX1272_DIO0);
@@ -180,91 +179,82 @@ void SX1272IoDeInit( void )
     }
 }
 
-void SX1272SetRfTxPower( int8_t power )
+void
+SX1272SetRfTxPower(int8_t power)
 {
-    uint8_t paConfig = 0;
-    uint8_t paDac = 0;
+    uint8_t paconfig;
+    uint8_t padac;
 
-    paConfig = SX1272Read( REG_PACONFIG );
-    paDac = SX1272Read( REG_PADAC );
+    paconfig = SX1272Read(REG_PACONFIG);
+    padac = SX1272Read(REG_PADAC);
 
-    paConfig = ( paConfig & RF_PACONFIG_PASELECT_MASK ) | SX1272GetPaSelect( SX1272.Settings.Channel );
+    paconfig = (paconfig & RF_PACONFIG_PASELECT_MASK) | SX1272GetPaSelect(SX1272.Settings.Channel);
 
-    if( ( paConfig & RF_PACONFIG_PASELECT_PABOOST ) == RF_PACONFIG_PASELECT_PABOOST )
-    {
-        if( power > 17 )
-        {
-            paDac = ( paDac & RF_PADAC_20DBM_MASK ) | RF_PADAC_20DBM_ON;
+    if ((paconfig & RF_PACONFIG_PASELECT_PABOOST) == RF_PACONFIG_PASELECT_PABOOST) {
+        if (power > 17) {
+            padac = (padac & RF_PADAC_20DBM_MASK) | RF_PADAC_20DBM_ON;
+        } else {
+            padac = (padac & RF_PADAC_20DBM_MASK) | RF_PADAC_20DBM_OFF;
         }
-        else
-        {
-            paDac = ( paDac & RF_PADAC_20DBM_MASK ) | RF_PADAC_20DBM_OFF;
-        }
-        if( ( paDac & RF_PADAC_20DBM_ON ) == RF_PADAC_20DBM_ON )
-        {
-            if( power < 5 )
-            {
+        if ((padac & RF_PADAC_20DBM_ON) == RF_PADAC_20DBM_ON) {
+            if (power < 5) {
                 power = 5;
             }
-            if( power > 20 )
-            {
+
+            if (power > 20) {
                 power = 20;
             }
-            paConfig = ( paConfig & RFLR_PACONFIG_OUTPUTPOWER_MASK ) | ( uint8_t )( ( uint16_t )( power - 5 ) & 0x0F );
-        }
-        else
-        {
-            if( power < 2 )
-            {
+            paconfig = (paconfig & RFLR_PACONFIG_OUTPUTPOWER_MASK) | (uint8_t)((uint16_t)(power - 5) & 0x0F);
+        } else {
+            if (power < 2) {
                 power = 2;
             }
-            if( power > 17 )
-            {
+
+            if (power > 17) {
                 power = 17;
             }
-            paConfig = ( paConfig & RFLR_PACONFIG_OUTPUTPOWER_MASK ) | ( uint8_t )( ( uint16_t )( power - 2 ) & 0x0F );
+            paconfig = (paconfig & RFLR_PACONFIG_OUTPUTPOWER_MASK) | (uint8_t)((uint16_t)(power - 2) & 0x0F);
         }
-    }
-    else
-    {
-        if( power < -1 )
-        {
+    } else {
+        if (power < -1) {
             power = -1;
         }
-        if( power > 14 )
-        {
+
+        if (power > 14) {
             power = 14;
         }
-        paConfig = ( paConfig & RFLR_PACONFIG_OUTPUTPOWER_MASK ) | ( uint8_t )( ( uint16_t )( power + 1 ) & 0x0F );
+        paconfig = (paconfig & RFLR_PACONFIG_OUTPUTPOWER_MASK) | (uint8_t)((uint16_t)(power + 1) & 0x0F);
     }
-    SX1272Write( REG_PACONFIG, paConfig );
-    SX1272Write( REG_PADAC, paDac );
+    SX1272Write(REG_PACONFIG, paconfig);
+    SX1272Write(REG_PADAC, padac);
 }
 
-uint8_t SX1272GetPaSelect( uint32_t channel )
+uint8_t
+SX1272GetPaSelect(uint32_t channel)
 {
+#if (MYNEWT_VAL(SX1272_USE_PA_BOOST) == 1)
     return RF_PACONFIG_PASELECT_PABOOST;
+#else
+    return RF_PACONFIG_PASELECT_RFO;
+#endif
 }
 
 #if (MYNEWT_VAL(SX1272_HAS_ANT_SW) || MYNEWT_VAL(SX1272_HAS_COMP_ANT_SW))
-void SX1272SetAntSwLowPower( bool status )
+void
+SX1272SetAntSwLowPower(bool status)
 {
-    if( RadioIsActive != status )
-    {
-        RadioIsActive = status;
-
-        if( status == false )
-        {
-            SX1272AntSwInit( );
-        }
-        else
-        {
-            SX1272AntSwDeInit( );
+    if (g_radio_is_active != status) {
+        g_radio_is_active = status;
+        if (status == false) {
+            SX1272AntSwInit();
+        } else {
+            SX1272AntSwDeInit();
         }
     }
 }
 
-void SX1272AntSwInit( void )
+void
+SX1272AntSwInit(void)
 {
     /*
      * XXX: consider doing this to save power. Currently the gpio are
@@ -272,7 +262,8 @@ void SX1272AntSwInit( void )
      */
 }
 
-void SX1272AntSwDeInit( void )
+void
+SX1272AntSwDeInit(void)
 {
     /*
      * XXX: consider doing this to save power. Currently the gpio are
@@ -280,30 +271,71 @@ void SX1272AntSwDeInit( void )
      */
 }
 
-void SX1272SetAntSw( uint8_t opMode )
+void
+SX1272SetAntSw(uint8_t opMode)
 {
     os_sr_t sr;
 
     OS_ENTER_CRITICAL(sr);
-    switch( opMode )
-    {
+    switch(opMode) {
     case RFLR_OPMODE_TRANSMITTER:
+#if MYNEWT_VAL(SX1272_HAS_COMP_ANT_SW)
         hal_gpio_write(SX1272_RXTX, 0);
         hal_gpio_write(SX1272_N_RXTX, 1);
+#endif
+#if MYNEWT_VAL(SX1272_HAS_ANT_SW)
+        hal_gpio_write(SX1272_RXTX, 1);
+#endif
         break;
     case RFLR_OPMODE_RECEIVER:
     case RFLR_OPMODE_RECEIVER_SINGLE:
     case RFLR_OPMODE_CAD:
     default:
+#if MYNEWT_VAL(SX1272_HAS_COMP_ANT_SW)
         hal_gpio_write(SX1272_RXTX, 1);
         hal_gpio_write(SX1272_N_RXTX, 0);
+#endif
+#if MYNEWT_VAL(SX1272_HAS_ANT_SW)
+        hal_gpio_write(SX1272_RXTX, 0);
+#endif
         break;
     }
     OS_EXIT_CRITICAL(sr);
 }
+#else
+void
+SX1272SetAntSwLowPower(bool status)
+{
+    (void)status;
+}
+
+void
+SX1272AntSwInit(void)
+{
+    /*
+     * XXX: consider doing this to save power. Currently the gpio are
+     * set to rx mode automatically in the IO init function.
+     */
+}
+
+void
+SX1272AntSwDeInit(void)
+{
+    /*
+     * XXX: consider doing this to save power. Currently the gpio are
+     * set to rx mode automatically in the IO init function.
+     */
+}
+
+void
+SX1272SetAntSw(uint8_t opMode)
+{
+    (void)opMode;
+}
 #endif
 
-bool SX1272CheckRfFrequency( uint32_t frequency )
+bool
+SX1272CheckRfFrequency(uint32_t frequency)
 {
     // Implement check. Currently all frequencies are supported
     return true;

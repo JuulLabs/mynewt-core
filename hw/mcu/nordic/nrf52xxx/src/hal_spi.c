@@ -20,7 +20,7 @@
 #include <errno.h>
 #include <assert.h>
 #include <syscfg/syscfg.h>
-#include <bsp/cmsis_nvic.h>
+#include <mcu/cmsis_nvic.h>
 #include <hal/hal_spi.h>
 #include "os/os_trace_api.h"
 #include "mcu/nrf52_hal.h"
@@ -40,7 +40,7 @@ typedef void (*nrf52_spi_irq_handler_t)(void);
  */
 
 /* The maximum number of SPI interfaces we will allow */
-#define NRF52_HAL_SPI_MAX (2)
+#define NRF52_HAL_SPI_MAX (3)
 
 /* Used to disable all interrupts */
 #define NRF_SPI_IRQ_DISABLE_ALL 0xFFFFFFFF
@@ -92,6 +92,9 @@ struct nrf52_hal_spi nrf52_hal_spi0;
 #if MYNEWT_VAL(SPI_1_MASTER)  || MYNEWT_VAL(SPI_1_SLAVE)
 struct nrf52_hal_spi nrf52_hal_spi1;
 #endif
+#if MYNEWT_VAL(SPI_2_MASTER)  || MYNEWT_VAL(SPI_2_SLAVE)
+struct nrf52_hal_spi nrf52_hal_spi2;
+#endif
 
 static const struct nrf52_hal_spi *nrf52_hal_spis[NRF52_HAL_SPI_MAX] = {
 #if MYNEWT_VAL(SPI_0_MASTER) || MYNEWT_VAL(SPI_0_SLAVE)
@@ -100,9 +103,14 @@ static const struct nrf52_hal_spi *nrf52_hal_spis[NRF52_HAL_SPI_MAX] = {
     NULL,
 #endif
 #if MYNEWT_VAL(SPI_1_MASTER)  || MYNEWT_VAL(SPI_1_SLAVE)
-    &nrf52_hal_spi1
+    &nrf52_hal_spi1,
 #else
-    NULL
+    NULL,
+#endif
+#if MYNEWT_VAL(SPI_2_MASTER)  || MYNEWT_VAL(SPI_2_SLAVE)
+    &nrf52_hal_spi2,
+#else
+    NULL,
 #endif
 };
 
@@ -117,7 +125,7 @@ static const struct nrf52_hal_spi *nrf52_hal_spis[NRF52_HAL_SPI_MAX] = {
         goto err;                                           \
     }
 
-#if (MYNEWT_VAL(SPI_0_MASTER) || MYNEWT_VAL(SPI_1_MASTER) )
+#if (MYNEWT_VAL(SPI_0_MASTER) || MYNEWT_VAL(SPI_1_MASTER) || MYNEWT_VAL(SPI_2_MASTER))
 static void
 nrf52_irqm_handler(struct nrf52_hal_spi *spi)
 {
@@ -163,7 +171,7 @@ nrf52_irqm_handler(struct nrf52_hal_spi *spi)
 }
 #endif
 
-#if (MYNEWT_VAL(SPI_0_SLAVE)  || MYNEWT_VAL(SPI_1_SLAVE) )
+#if (MYNEWT_VAL(SPI_0_SLAVE)  || MYNEWT_VAL(SPI_1_SLAVE) || MYNEWT_VAL(SPI_2_SLAVE))
 static void
 nrf52_irqs_handler(struct nrf52_hal_spi *spi)
 {
@@ -248,6 +256,24 @@ nrf52_spi1_irq_handler(void)
     } else {
 #if MYNEWT_VAL(SPI_1_SLAVE)
         nrf52_irqs_handler(&nrf52_hal_spi1);
+#endif
+    }
+    os_trace_exit_isr();
+}
+#endif
+
+#if MYNEWT_VAL(SPI_2_MASTER)  || MYNEWT_VAL(SPI_2_SLAVE)
+void
+nrf52_spi2_irq_handler(void)
+{
+    os_trace_enter_isr();
+    if (nrf52_hal_spi2.spi_type == HAL_SPI_TYPE_MASTER) {
+#if MYNEWT_VAL(SPI_2_MASTER)
+        nrf52_irqm_handler(&nrf52_hal_spi2);
+#endif
+    } else {
+#if MYNEWT_VAL(SPI_2_SLAVE)
+        nrf52_irqs_handler(&nrf52_hal_spi2);
 #endif
     }
     os_trace_exit_isr();
@@ -402,25 +428,33 @@ hal_spi_init_master(struct nrf52_hal_spi *spi,
                     nrf52_spi_irq_handler_t handler)
 {
     NRF_SPIM_Type *spim;
+    NRF_GPIO_Type *port;
+    uint32_t pin;
 
     /* Configure SCK */
+    port = HAL_GPIO_PORT(cfg->sck_pin);
+    pin = HAL_GPIO_INDEX(cfg->sck_pin);
     if (spi->spi_cfg.data_mode <= HAL_SPI_MODE1) {
-        NRF_P0->OUTCLR = (1UL << cfg->sck_pin);
+        port->OUTCLR = (1UL << pin);
     } else {
-        NRF_P0->OUTSET = (1UL << cfg->sck_pin);
+        port->OUTSET = (1UL << pin);
     }
-    NRF_P0->PIN_CNF[cfg->sck_pin] =
+    port->PIN_CNF[pin] =
         (GPIO_PIN_CNF_DIR_Output << GPIO_PIN_CNF_DIR_Pos) |
         (GPIO_PIN_CNF_INPUT_Connect << GPIO_PIN_CNF_INPUT_Pos);
 
     /*  Configure MOSI */
-    NRF_P0->OUTCLR = (1UL << cfg->mosi_pin);
-    NRF_P0->PIN_CNF[cfg->mosi_pin] =
+    port = HAL_GPIO_PORT(cfg->mosi_pin);
+    pin = HAL_GPIO_INDEX(cfg->mosi_pin);
+    port->OUTCLR = (1UL << pin);
+    port->PIN_CNF[pin] =
         ((uint32_t)GPIO_PIN_CNF_DIR_Output << GPIO_PIN_CNF_DIR_Pos) |
         ((uint32_t)GPIO_PIN_CNF_INPUT_Disconnect << GPIO_PIN_CNF_INPUT_Pos);
 
     /* Configure MISO */
-    NRF_P0->PIN_CNF[cfg->miso_pin] =
+    port = HAL_GPIO_PORT(cfg->miso_pin);
+    pin = HAL_GPIO_INDEX(cfg->miso_pin);
+    port->PIN_CNF[pin] =
         ((uint32_t)GPIO_PIN_CNF_DIR_Input << GPIO_PIN_CNF_DIR_Pos) |
         ((uint32_t)GPIO_PIN_CNF_INPUT_Connect << GPIO_PIN_CNF_INPUT_Pos);
 
@@ -444,21 +478,32 @@ hal_spi_init_slave(struct nrf52_hal_spi *spi,
                    nrf52_spi_irq_handler_t handler)
 {
     NRF_SPIS_Type *spis;
+    NRF_GPIO_Type *port;
+    uint32_t pin;
 
-    NRF_P0->PIN_CNF[cfg->miso_pin] =
+    /* NOTE: making this pin an input is correct! See datasheet */
+    port = HAL_GPIO_PORT(cfg->miso_pin);
+    pin = HAL_GPIO_INDEX(cfg->miso_pin);
+    port->PIN_CNF[pin] =
         ((uint32_t)GPIO_PIN_CNF_DIR_Input << GPIO_PIN_CNF_DIR_Pos) |
         ((uint32_t)GPIO_PIN_CNF_INPUT_Connect << GPIO_PIN_CNF_INPUT_Pos);
 
-    NRF_P0->PIN_CNF[cfg->mosi_pin] =
+    port = HAL_GPIO_PORT(cfg->mosi_pin);
+    pin = HAL_GPIO_INDEX(cfg->mosi_pin);
+    port->PIN_CNF[pin] =
         ((uint32_t)GPIO_PIN_CNF_DIR_Input << GPIO_PIN_CNF_DIR_Pos) |
         ((uint32_t)GPIO_PIN_CNF_INPUT_Connect << GPIO_PIN_CNF_INPUT_Pos);
 
-    NRF_P0->PIN_CNF[cfg->ss_pin] =
+    port = HAL_GPIO_PORT(cfg->ss_pin);
+    pin = HAL_GPIO_INDEX(cfg->ss_pin);
+    port->PIN_CNF[pin] =
         ((uint32_t)GPIO_PIN_CNF_DIR_Input << GPIO_PIN_CNF_DIR_Pos) |
         ((uint32_t)GPIO_PIN_CNF_PULL_Pullup  << GPIO_PIN_CNF_PULL_Pos) |
         ((uint32_t)GPIO_PIN_CNF_INPUT_Connect << GPIO_PIN_CNF_INPUT_Pos);
 
-    NRF_P0->PIN_CNF[cfg->sck_pin] =
+    port = HAL_GPIO_PORT(cfg->sck_pin);
+    pin = HAL_GPIO_INDEX(cfg->sck_pin);
+    port->PIN_CNF[pin] =
         ((uint32_t)GPIO_PIN_CNF_DIR_Input << GPIO_PIN_CNF_DIR_Pos) |
         ((uint32_t)GPIO_PIN_CNF_INPUT_Connect << GPIO_PIN_CNF_INPUT_Pos);
 
@@ -550,6 +595,26 @@ hal_spi_init(int spi_num, void *cfg, uint8_t spi_type)
         } else {
 #if MYNEWT_VAL(SPI_1_SLAVE)
             spi->nhs_spi.spis = NRF_SPIS1;
+#else
+            assert(0);
+#endif
+        }
+#else
+        goto err;
+#endif
+    } else if (spi_num == 2) {
+#if MYNEWT_VAL(SPI_2_MASTER)  || MYNEWT_VAL(SPI_2_SLAVE)
+        spi->irq_num = SPIM2_SPIS2_SPI2_IRQn;
+        irq_handler = nrf52_spi2_irq_handler;
+        if (spi_type == HAL_SPI_TYPE_MASTER) {
+#if MYNEWT_VAL(SPI_2_MASTER)
+            spi->nhs_spi.spim = NRF_SPIM2;
+#else
+            assert(0);
+#endif
+        } else {
+#if MYNEWT_VAL(SPI_2_SLAVE)
+            spi->nhs_spi.spis = NRF_SPIS2;
 #else
             assert(0);
 #endif
@@ -730,7 +795,6 @@ uint16_t hal_spi_tx_val(int spi_num, uint16_t val)
         while (!spi->EVENTS_READY) {}
         spi->EVENTS_READY = 0;
         retval = (uint16_t)spi->RXD;
-
     } else {
         retval = 0xFFFF;
     }
