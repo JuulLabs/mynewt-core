@@ -113,6 +113,10 @@ syscfg.defs:
     SOFT_PWM:
         description: 'SOFT PWM'
         value: 0
+        
+    I2C_DEBUG:
+        description: 'Enable I2C debug messages'
+        value: 0
 
 # The XTAL_xxx definitions are used to set the clock source used for the low
 # frequency clock. It is required that at least one of these sources is

@@ -244,6 +244,9 @@ hal_i2c_init(uint8_t i2c_num, void *usercfg)
 
     return (0);
 err:
+#if MYNEWT_VAL(I2C_DEBUG) != 0
+    console_printf("Failed to init i2c %d\n", i2c_num);
+#endif
     return (rc);
 }
 
@@ -304,6 +307,9 @@ err:
         regs->TASKS_STOP = 1;
         regs->ERRORSRC = rc;
     }
+#if MYNEWT_VAL(I2C_DEBUG) != 0
+    console_printf("I2C write failure for I2C address 0x%0x, err %d\n", pdata->address, rc);
+#endif
     return (rc);
 }
 
@@ -371,6 +377,9 @@ err:
         regs->TASKS_STOP = 1;
         regs->ERRORSRC = rc;
     }
+#if MYNEWT_VAL(I2C_DEBUG) != 0
+    console_printf("I2C read failure for I2C address 0x%0x, err %d\n", pdata->address, rc);
+#endif
     return (rc);
 }
 
@@ -383,6 +392,12 @@ hal_i2c_master_probe(uint8_t i2c_num, uint8_t address, uint32_t timo)
     rx.address = address;
     rx.buffer = &buf;
     rx.len = 1;
-
+#if MYNEWT_VAL(I2C_DEBUG) != 0
+    int rc = hal_i2c_master_read(i2c_num, &rx, timo, 1);
+    if(rc)
+        console_printf("I2C probe failed for address 0x%0x, err: %d\n", address, rc);
+    return rc;
+#else
     return hal_i2c_master_read(i2c_num, &rx, timo, 1);
+#endif
 }
