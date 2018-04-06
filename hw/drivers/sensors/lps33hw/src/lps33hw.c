@@ -141,6 +141,20 @@ lps33hw_reg_to_hpa(int32_t reg)
 }
 
 /*
+ * Converts pressure read from the device output registers to a value in
+ * pascals.
+ *
+ * @param Pressure value read from the output registers.
+ *
+ * @return Pressure value in pascals.
+ */
+static float
+lps33hw_reg_to_pa(int32_t reg)
+{
+    return (lps33hw_reg_to_hpa(reg)) * 100;
+}
+
+/*
  * Converts temperature read from the device output registers to a value in
  * degrees C.
  *
@@ -473,7 +487,7 @@ lps33hw_get_pressure_regs(struct sensor_itf *itf, uint8_t reg, float *pressure)
         int_press |= 0xff000000;
     }
 
-    *pressure = lps33hw_reg_to_hpa(int_press);
+    *pressure = lps33hw_reg_to_pa(int_press);
 
     return 0;
 }
