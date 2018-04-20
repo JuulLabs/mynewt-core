@@ -106,6 +106,8 @@ typedef enum {
     SENSOR_EVENT_TYPE_FREE_FALL      = (1 << 2),
     /* Accelerometer sleep change event */
     SENSOR_EVENT_TYPE_SLEEP_CHANGE   = (1 << 3),
+    /* Accelerometer wake up event */
+    SENSOR_EVENT_TYPE_WAKEUP         = (1 << 4),
 } sensor_event_type_t;
 
 
