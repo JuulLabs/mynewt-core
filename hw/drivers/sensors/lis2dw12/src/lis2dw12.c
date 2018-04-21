@@ -2564,17 +2564,17 @@ lis2dw12_sensor_handle_interrupt(struct sensor *sensor)
     }
 
     if (int_src & LIS2DW12_INT_SRC_SLP_CHG) {
-        if(int_src & LIS2DW12_INT_SRC_WU_IA) {
-            lis2dw12->pdd.notify_ctx.snec_evtype &= ~SENSOR_EVENT_TYPE_DOUBLE_TAP;
-            lis2dw12->pdd.notify_ctx.snec_evtype &= ~SENSOR_EVENT_TYPE_SLEEP_CHANGE;
-            lis2dw12->pdd.notify_ctx.snec_evtype |=  SENSOR_EVENT_TYPE_WAKEUP;
+        if (int_src & LIS2DW12_INT_SRC_WU_IA) {
+            lis2dw12->pdd.notify_ctx.snec_evtype &= ~(SENSOR_EVENT_TYPE_DOUBLE_TAP |
+                                                      SENSOR_EVENT_TYPE_SLEEP_CHANGE);
+            lis2dw12->pdd.notify_ctx.snec_evtype |= SENSOR_EVENT_TYPE_WAKEUP;
 
             sensor_mgr_put_notify_evt(&lis2dw12->pdd.notify_ctx);
         }
         else
         {
-            lis2dw12->pdd.notify_ctx.snec_evtype &= ~SENSOR_EVENT_TYPE_DOUBLE_TAP;
-            lis2dw12->pdd.notify_ctx.snec_evtype &= ~SENSOR_EVENT_TYPE_WAKEUP;
+            lis2dw12->pdd.notify_ctx.snec_evtype &= ~(SENSOR_EVENT_TYPE_DOUBLE_TAP |
+                                                      SENSOR_EVENT_TYPE_WAKEUP);
             lis2dw12->pdd.notify_ctx.snec_evtype |=  SENSOR_EVENT_TYPE_SLEEP_CHANGE;
 
             sensor_mgr_put_notify_evt(&lis2dw12->pdd.notify_ctx);
@@ -2582,8 +2582,8 @@ lis2dw12_sensor_handle_interrupt(struct sensor *sensor)
     }
 
     if (int_src & LIS2DW12_INT_SRC_DTAP) {
-        lis2dw12->pdd.notify_ctx.snec_evtype &= ~SENSOR_EVENT_TYPE_WAKEUP;
-        lis2dw12->pdd.notify_ctx.snec_evtype &= ~SENSOR_EVENT_TYPE_SLEEP_CHANGE;
+        lis2dw12->pdd.notify_ctx.snec_evtype &= ~(SENSOR_EVENT_TYPE_WAKEUP |
+                                                  SENSOR_EVENT_TYPE_SLEEP_CHANGE);
         lis2dw12->pdd.notify_ctx.snec_evtype |=  SENSOR_EVENT_TYPE_DOUBLE_TAP;
 
         sensor_mgr_put_notify_evt(&lis2dw12->pdd.notify_ctx);
