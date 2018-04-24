@@ -54,14 +54,27 @@ void
 rtt(void *arg)
 {
     int key;
-    int i = 0;
+    int i = 0;      // why not static? runtime note below looks incorrect, should always be 50ms
     uint32_t timeout;
 
-    key = SEGGER_RTT_GetKey();
-    if (key >= 0) {
-        console_handle_char((char)key);
-        i = 0;
+    // begin CH test FW 18-0419
+    int j;
+    for (j = 0; j < 20; j++) {
+        key = SEGGER_RTT_GetKey();
+        if (key >= 0) {
+            console_handle_char((char)key);
+            i = 0;
+        } else {
+            break;
+        }
     }
+    // end CH test FW 18-0419
+
+    // key = SEGGER_RTT_GetKey();
+    // if (key >= 0) {
+    //     console_handle_char((char)key);
+    //     i = 0;
+    // }
     /* These values were selected to keep the shell responsive
      * and at the same time reduce context switches.
      * Min sleep is 50ms and max is 250ms.
@@ -69,6 +82,7 @@ rtt(void *arg)
     if (i < 5) {
         ++i;
     }
+
     timeout = 50000 * i;
     os_cputime_timer_relative(&rtt_timer, timeout);
 }
