@@ -33,6 +33,8 @@
 #include "log/log.h"
 #include "stats/stats.h"
 
+#include "data_recorder/data_recorder.h"
+
 const struct lis2dw12_notif_cfg dflt_notif_cfg[] = {
     { SENSOR_EVENT_TYPE_SINGLE_TAP,   0, LIS2DW12_INT1_CFG_SINGLE_TAP  },
     { SENSOR_EVENT_TYPE_DOUBLE_TAP,   0, LIS2DW12_INT1_CFG_DOUBLE_TAP  },
@@ -92,6 +94,7 @@ static int lis2dw12_sensor_unset_notification(struct sensor *,
                                               sensor_event_type_t);
 static int lis2dw12_sensor_handle_interrupt(struct sensor *);
 static int lis2dw12_sensor_set_config(struct sensor *, void *);
+static int lis2dw12_i2c_error_log(struct hal_i2c_master_data * data, datarec_i2c_read_write_e type);
 
 static const struct sensor_driver g_lis2dw12_sensor_driver = {
     .sd_read               = lis2dw12_sensor_read,
@@ -131,6 +134,7 @@ lis2dw12_i2c_write8(struct sensor_itf *itf, uint8_t reg, uint8_t value)
         LIS2DW12_ERR("Failed to write to 0x%02X:0x%02X with value 0x%02X\n",
                     itf->si_addr, reg, value);
         STATS_INC(g_lis2dw12stats, read_errors);
+        lis2dw12_i2c_error_log(&data_struct, DATAREC_I2C_WRITE);
     }
 
     return rc;
@@ -163,6 +167,8 @@ lis2dw12_i2c_readlen(struct sensor_itf *itf, uint8_t reg, uint8_t *buffer, uint8
     if (rc) {
         LIS2DW12_ERR("I2C access failed at address 0x%02X\n", itf->si_addr);
         STATS_INC(g_lis2dw12stats, write_errors);
+        lis2dw12_i2c_error_log(&data_struct, DATAREC_I2C_WRITE);
+
         return rc;
     }
 
@@ -175,7 +181,46 @@ lis2dw12_i2c_readlen(struct sensor_itf *itf, uint8_t reg, uint8_t *buffer, uint8
     if (rc) {
         LIS2DW12_ERR("Failed to read from 0x%02X:0x%02X\n", itf->si_addr, reg);
         STATS_INC(g_lis2dw12stats, read_errors);
+
+        lis2dw12_i2c_error_log(&data_struct, DATAREC_I2C_READ);
     }
+
+    return rc;
+}
+
+/**
+ * @brief      Logging I2C error to the application layer.
+ *
+ * @param      data  The data of the I2C transaction, including payload.
+ * @param[in]  type  The type of I2C transaction - Read / Write
+ *
+ * @return     0 on success, non-zero error on failure.
+ */
+static int
+lis2dw12_i2c_error_log(struct hal_i2c_master_data * data, datarec_i2c_read_write_e type)
+{
+    int i = 0, rc = 0;
+    datarec_i2c_fault_t i2c_error;
+
+    i2c_error.address = data->address;
+    i2c_error.len     = data->len;
+    if(type == DATAREC_I2C_READ)
+    {
+        i2c_error.rw = DATAREC_I2C_READ;
+    }   
+    else
+    {
+        i2c_error.rw = DATAREC_I2C_WRITE;
+    }
+
+    memset(i2c_error.data, 0, 8);
+
+    for(i = 0; i < i2c_error.len; i++)
+    {
+        i2c_error.data[i] = data->buffer[i];
+    }
+
+    rc = datarec_i2c_fault_log(&i2c_error);
 
     return rc;
 }
