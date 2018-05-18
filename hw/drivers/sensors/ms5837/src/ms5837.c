@@ -32,6 +32,7 @@
 #include "console/console.h"
 #include "log/log.h"
 #include "stats/stats.h"
+#include "data_recorder/data_recorder.h"
 
 static uint16_t cnv_time[6] = {
     MS5837_CNV_TIME_OSR_256,
@@ -70,7 +71,8 @@ static int ms5837_sensor_read(struct sensor *, sensor_type_t,
 static int ms5837_sensor_get_config(struct sensor *, sensor_type_t,
         struct sensor_cfg *);
 static int ms5837_sensor_set_config(struct sensor *, void *);
-
+static int ms5837_i2c_error_log(struct hal_i2c_master_data * data, 
+        datarec_i2c_read_write_e type);
 static const struct sensor_driver g_ms5837_sensor_driver = {
     .sd_read = ms5837_sensor_read,
     .sd_get_config = ms5837_sensor_get_config,
@@ -338,6 +340,8 @@ ms5837_writelen(struct sensor_itf *itf, uint8_t addr, uint8_t *buffer,
         MS5837_ERR("I2C write command write failed at address 0x%02X\n",
                    data_struct.address);
         STATS_INC(g_ms5837stats, write_errors);
+        ms5837_i2c_error_log(&data_struct, DATAREC_I2C_WRITE);
+
         goto err;
     }
 
@@ -378,6 +382,8 @@ ms5837_readlen(struct sensor_itf *itf, uint8_t addr, uint8_t *buffer,
         MS5837_ERR("I2C read command write failed at address 0x%02X\n",
                    data_struct.address);
         STATS_INC(g_ms5837stats, write_errors);
+        ms5837_i2c_error_log(&data_struct, DATAREC_I2C_WRITE);
+
         goto err;
     }
 
@@ -388,6 +394,7 @@ ms5837_readlen(struct sensor_itf *itf, uint8_t addr, uint8_t *buffer,
     if (rc) {
         MS5837_ERR("Failed to read from 0x%02X:0x%02X\n", data_struct.address, addr);
         STATS_INC(g_ms5837stats, read_errors);
+        ms5837_i2c_error_log(&data_struct, DATAREC_I2C_READ);
         goto err;
     }
 
@@ -396,6 +403,43 @@ ms5837_readlen(struct sensor_itf *itf, uint8_t addr, uint8_t *buffer,
 
     return 0;
 err:
+    return rc;
+}
+
+/**
+ * @brief      Logging I2C error to the application layer.
+ *
+ * @param      data  The data of the I2C transaction, including payload.
+ * @param[in]  type  The type of I2C transaction - Read / Write
+ *
+ * @return     0 on success, non-zero error on failure.
+ */
+static int
+ms5837_i2c_error_log(struct hal_i2c_master_data * data, datarec_i2c_read_write_e type)
+{
+    int i = 0, rc = 0;
+    datarec_i2c_fault_t i2c_error;
+
+    i2c_error.address = data->address;
+    i2c_error.len     = data->len;
+    if(type == DATAREC_I2C_READ)
+    {
+        i2c_error.rw = DATAREC_I2C_READ;
+    }   
+    else
+    {
+        i2c_error.rw = DATAREC_I2C_WRITE;
+    }
+
+    memset(i2c_error.data, 0, 8);
+
+    for(i = 0; i < i2c_error.len; i++)
+    {
+        i2c_error.data[i] = data->buffer[i];
+    }
+
+    rc = datarec_i2c_fault_log(&i2c_error);
+
     return rc;
 }
 
