@@ -341,7 +341,7 @@ err:
         regs->ERRORSRC = rc;
     }
 
-    i2c_issues_t data =
+    datarec_fault_i2c_t data =
     {
         .data = pdata,
         .rw   = DATAREC_I2C_WRITE,
@@ -415,7 +415,7 @@ err:
         regs->ERRORSRC = rc;
     }
 
-    i2c_issues_t data =
+    datarec_fault_i2c_t data =
     {
         .data = pdata,
         .rw   = DATAREC_I2C_READ,
