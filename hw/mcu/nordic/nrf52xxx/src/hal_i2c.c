@@ -26,6 +26,10 @@
 #include <hal/hal_gpio.h>
 #include <mcu/nrf52_hal.h>
 
+#if MYNEWT_VAL(DATA_RECORDER_LOG_I2C_ENABLE)
+#include "data_recorder/data_recorder.h"
+#endif
+
 #include <nrf.h>
 
 #define NRF52_HAL_I2C_MAX (2)
@@ -338,6 +342,14 @@ err:
         regs->TASKS_STOP = 1;
         regs->ERRORSRC = rc;
     }
+#if MYNEWT_VAL(DATA_RECORDER_LOG_I2C_ENABLE)
+    datarec_fault_i2c_t data =
+    {
+        .data = *pdata,
+        .rw   = DATAREC_I2C_WRITE,
+    };
+    datarec_i2c_queue(&data);
+#endif
     return (rc);
 }
 
@@ -405,6 +417,14 @@ err:
         regs->TASKS_STOP = 1;
         regs->ERRORSRC = rc;
     }
+#if MYNEWT_VAL(DATA_RECORDER_LOG_I2C_ENABLE)
+    datarec_fault_i2c_t data =
+    {
+        .data = *pdata,
+        .rw   = DATAREC_I2C_READ,
+    };
+    datarec_i2c_queue(&data);
+#endif
     return (rc);
 }
 
