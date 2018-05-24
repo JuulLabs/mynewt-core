@@ -111,6 +111,10 @@ typedef enum {
     SENSOR_EVENT_TYPE_WAKEUP         = (1 << 4),
     /* Sleep Event */
     SENSOR_EVENT_TYPE_SLEEP          = (1 << 5),
+    /* Accelerometer FIFO FULL */
+    SENSOR_EVENT_TYPE_FIFO_FULL      = (1 << 6),
+    /* Accelerometer Axis Threshold Crossed */
+    SENSOR_EVENT_TYPE_AXIS_THRESHOLD = (1 << 7),
 } sensor_event_type_t;
 
 

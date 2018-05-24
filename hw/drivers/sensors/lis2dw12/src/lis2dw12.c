@@ -34,12 +34,13 @@
 #include "stats/stats.h"
 
 const struct lis2dw12_notif_cfg dflt_notif_cfg[] = {
-    { SENSOR_EVENT_TYPE_SINGLE_TAP,   0, LIS2DW12_INT1_CFG_SINGLE_TAP  },
-    { SENSOR_EVENT_TYPE_DOUBLE_TAP,   0, LIS2DW12_INT1_CFG_DOUBLE_TAP  },
-    { SENSOR_EVENT_TYPE_SLEEP,        1, LIS2DW12_INT2_CFG_SLEEP_STATE },
-    { SENSOR_EVENT_TYPE_FREE_FALL,    0, LIS2DW12_INT1_CFG_FF          },
-    { SENSOR_EVENT_TYPE_WAKEUP,       0, LIS2DW12_INT1_CFG_WU          },
-    { SENSOR_EVENT_TYPE_SLEEP_CHANGE, 1, LIS2DW12_INT2_CFG_SLEEP_CHG   }
+    { SENSOR_EVENT_TYPE_SINGLE_TAP,     0, LIS2DW12_INT1_CFG_SINGLE_TAP  },
+    { SENSOR_EVENT_TYPE_DOUBLE_TAP,     0, LIS2DW12_INT1_CFG_DOUBLE_TAP  },
+    { SENSOR_EVENT_TYPE_SLEEP,          1, LIS2DW12_INT2_CFG_SLEEP_STATE },
+    { SENSOR_EVENT_TYPE_FREE_FALL,      0, LIS2DW12_INT1_CFG_FF          },
+    { SENSOR_EVENT_TYPE_WAKEUP,         0, LIS2DW12_INT1_CFG_WU          },
+    { SENSOR_EVENT_TYPE_SLEEP_CHANGE,   1, LIS2DW12_INT2_CFG_SLEEP_CHG   },
+    { SENSOR_EVENT_TYPE_AXIS_THRESHOLD, 0, LIS2DW12_INT1_CFG_6D          }
 };
 
 static struct hal_spi_settings spi_lis2dw12_settings = {
@@ -59,6 +60,7 @@ STATS_SECT_START(lis2dw12_stat_section)
     STATS_SECT_ENTRY(sleep_notify)
     STATS_SECT_ENTRY(wakeup_notify)
     STATS_SECT_ENTRY(sleep_chg_notify)
+    STATS_SECT_ENTRY(threshold_breached_notify)
 STATS_SECT_END
 
 /* Define stat names for querying */
@@ -71,6 +73,7 @@ STATS_NAME_START(lis2dw12_stat_section)
     STATS_NAME(lis2dw12_stat_section, sleep_notify)
     STATS_NAME(lis2dw12_stat_section, wakeup_notify)
     STATS_NAME(lis2dw12_stat_section, sleep_chg_notify)
+    STATS_NAME(lis2dw12_stat_section, threshold_breached_notify)
 STATS_NAME_END(lis2dw12_stat_section)
 
 /* Global variable used to hold stats data */
@@ -2401,8 +2404,8 @@ lis2dw12_stream_read(struct sensor *sensor,
 err:
     /* disable interrupt */
     pdd->interrupt = NULL;
-    rc = disable_interrupt(sensor, cfg->read_mode.int_cfg,
-                           cfg->read_mode.int_num);
+    rc |= disable_interrupt(sensor, cfg->read_mode.int_cfg,
+                            cfg->read_mode.int_num);
 
     return rc;
 }
@@ -2648,6 +2651,13 @@ lis2dw12_sensor_handle_interrupt(struct sensor *sensor)
         sensor_mgr_put_notify_evt(&lis2dw12->pdd.notify_ctx,
                                   SENSOR_EVENT_TYPE_SLEEP_CHANGE);
         STATS_INC(g_lis2dw12stats, sleep_chg_notify);
+    }
+
+    if (int_src & LIS2DW12_INT_SRC_6D_IA) {
+        /* Axis has crossed its threshold */
+        sensor_mgr_put_notify_evt(&lis2dw12->pdd.notify_ctx,
+                                  SENSOR_EVENT_TYPE_AXIS_THRESHOLD);
+        STATS_INC(g_lis2dw12stats, threshold_breached_notify);
     }
 
     return 0;
