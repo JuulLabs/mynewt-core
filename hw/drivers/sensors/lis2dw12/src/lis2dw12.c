@@ -32,6 +32,7 @@
 #include "hal/hal_gpio.h"
 #include "log/log.h"
 #include "stats/stats.h"
+#include "console/console.h"
 
 /*
  * Max time to wait for interrupt.
@@ -1922,20 +1923,23 @@ int lis2dw12_run_self_test(struct sensor_itf *itf, int *result)
     int rc;
     /*configure min and max values for reading 5 samples, and accounting for
      * both negative and positive offset */
-    int16_t min = LIS2DW12_ST_MIN*5*2;
-    int16_t max = LIS2DW12_ST_MAX*5*2;
+    int16_t min_val = LIS2DW12_ST_MIN*5*2;
+    int16_t max_val = LIS2DW12_ST_MAX*5*2;
 
     int16_t min[] = {0,0,0}, max[] = {0,0,0}, baseline[] = {0,0,0}, data[3];
     int i,j;
     uint8_t prev_config[6];
     /* set config per datasheet, with positive self test mode enabled.
-     * Per ST's AN5038*/
+     * Per ST's AN5038
+     * Set BDU=1, FS=4g, high performance, ODR=50hz. For */
     uint8_t st_config[] = {0x44, 0x08, 0x00, 0x00, 0x00, 0x10};
 
     rc = lis2dw12_readlen(itf, LIS2DW12_REG_CTRL_REG1, prev_config, 6);
     if (rc) {
         return rc;
     }
+
+    /* configure sensor, per above */
     rc = lis2dw12_writelen(itf, LIS2DW12_REG_CTRL_REG2, &st_config[1], 5);
     rc = lis2dw12_writelen(itf, LIS2DW12_REG_CTRL_REG1, st_config, 1);
     if (rc) {
@@ -1955,6 +1959,7 @@ int lis2dw12_run_self_test(struct sensor_itf *itf, int *result)
         return rc;
     }
 
+    /* red outpur registers 5 times */
     for (i=0; i<5; i++) {
             /* wait at least 20 ms */
             os_time_delay(OS_TICKS_PER_SEC / 50 + 1);
@@ -1968,11 +1973,16 @@ int lis2dw12_run_self_test(struct sensor_itf *itf, int *result)
             baseline[2] += data[2];
     }
 
+    /* Average the values just read */
+    baseline[0] /= 5;
+    baseline[1] /= 5;
+    baseline[2] /= 5;
+
     /* Enable positive offset self test */
     rc = lis2dw12_set_self_test(itf, LIS2DW12_ST_MODE_MODE1);
 
-    /* wait 100ms discard 1 sample */
-    os_time_delay(OS_TICKS_PER_SEC / 10);
+    /* wait at least 20 ms */
+    os_time_delay(OS_TICKS_PER_SEC / 50 + 1);
     rc = lis2dw12_get_data(itf, 2, &(data[0]), &(data[1]), &(data[2]));
     if (rc) {
         return rc;
@@ -1999,12 +2009,9 @@ int lis2dw12_run_self_test(struct sensor_itf *itf, int *result)
         }
     }
 
-    baseline[0] /= 5;
-    baseline[1] /= 5;
-    baseline[2] /= 5;
-
-    /* disable self test mod */
-    rc = lis2dw12_writelen(itf, LIS2DW12_REG_CTRL_REG1, prev_config, 6);
+    /* disable self test mode */
+    rc = lis2dw12_writelen(itf, LIS2DW12_REG_CTRL_REG2, &prev_config[1], 5);
+    rc = lis2dw12_writelen(itf, LIS2DW12_REG_CTRL_REG1, prev_config, 1);
     if (rc) {
         return rc;
     }
@@ -2012,7 +2019,7 @@ int lis2dw12_run_self_test(struct sensor_itf *itf, int *result)
     /* compare values to thresholds */
     *result = 0;
     for (i = 0; i < 3; i++) {
-        if ((baseline[i] < min) || (baseline[i] > max)) {
+        if ((baseline[i] < min_val) || (baseline[i] > max_val)) {
             *result -= 1;
         }
     }
