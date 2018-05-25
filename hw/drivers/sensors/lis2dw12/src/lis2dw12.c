@@ -33,6 +33,8 @@
 #include "log/log.h"
 #include "stats/stats.h"
 
+#include "console/console.h"
+
 const struct lis2dw12_notif_cfg dflt_notif_cfg[] = {
     { SENSOR_EVENT_TYPE_SINGLE_TAP,     0, LIS2DW12_INT1_CFG_SINGLE_TAP  },
     { SENSOR_EVENT_TYPE_DOUBLE_TAP,     0, LIS2DW12_INT1_CFG_DOUBLE_TAP  },
@@ -40,7 +42,7 @@ const struct lis2dw12_notif_cfg dflt_notif_cfg[] = {
     { SENSOR_EVENT_TYPE_FREE_FALL,      0, LIS2DW12_INT1_CFG_FF          },
     { SENSOR_EVENT_TYPE_WAKEUP,         0, LIS2DW12_INT1_CFG_WU          },
     { SENSOR_EVENT_TYPE_SLEEP_CHANGE,   1, LIS2DW12_INT2_CFG_SLEEP_CHG   },
-    { SENSOR_EVENT_TYPE_AXIS_THRESHOLD, 0, LIS2DW12_INT1_CFG_6D          }
+    { SENSOR_EVENT_TYPE_FIFO_FULL,      0, LIS2DW12_INT1_CFG_FTH         }
 };
 
 static struct hal_spi_settings spi_lis2dw12_settings = {
@@ -60,7 +62,7 @@ STATS_SECT_START(lis2dw12_stat_section)
     STATS_SECT_ENTRY(sleep_notify)
     STATS_SECT_ENTRY(wakeup_notify)
     STATS_SECT_ENTRY(sleep_chg_notify)
-    STATS_SECT_ENTRY(threshold_breached_notify)
+    STATS_SECT_ENTRY(fifo_thresh_breached_notify)
 STATS_SECT_END
 
 /* Define stat names for querying */
@@ -73,7 +75,7 @@ STATS_NAME_START(lis2dw12_stat_section)
     STATS_NAME(lis2dw12_stat_section, sleep_notify)
     STATS_NAME(lis2dw12_stat_section, wakeup_notify)
     STATS_NAME(lis2dw12_stat_section, sleep_chg_notify)
-    STATS_NAME(lis2dw12_stat_section, threshold_breached_notify)
+    STATS_NAME(lis2dw12_stat_section, fifo_thresh_breached_notify)
 STATS_NAME_END(lis2dw12_stat_section)
 
 /* Global variable used to hold stats data */
@@ -1340,6 +1342,32 @@ int lis2dw12_get_fifo_samples(struct sensor_itf *itf, uint8_t *samples)
     return 0;
 }
 
+////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Get Number of Samples in FIFO
+ *
+ * @param the sensor interface
+ * @patam Pointer to return number of samples in
+ * @return 0 on success, non-zero on failure
+ */
+int lis2dw12_get_fifo_thresh_flag(struct sensor_itf *itf, uint8_t *thresh_flag)
+{
+    uint8_t reg;
+    int rc;
+
+    rc = lis2dw12_read8(itf, LIS2DW12_REG_FIFO_SAMPLES, &reg);
+    if (rc) {
+        return rc;
+    }
+
+    *thresh_flag = reg & LIS2DW12_FIFO_SAMPLES_FTH;
+
+    return 0;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
 /**
  * Clear interrupt pin configuration for interrupt 1
  *
@@ -2404,8 +2432,8 @@ lis2dw12_stream_read(struct sensor *sensor,
 err:
     /* disable interrupt */
     pdd->interrupt = NULL;
-    rc |= disable_interrupt(sensor, cfg->read_mode.int_cfg,
-                            cfg->read_mode.int_num);
+    // rc |= disable_interrupt(sensor, cfg->read_mode.int_cfg,
+    //                         cfg->read_mode.int_num);
 
     return rc;
 }
@@ -2588,21 +2616,24 @@ lis2dw12_sensor_handle_interrupt(struct sensor *sensor)
     struct sensor_itf *itf;
     uint8_t int_src;
     uint8_t int_status;
+    // uint8_t thresh_flag;
     int rc;
 
     lis2dw12 = (struct lis2dw12 *)SENSOR_GET_DEVICE(sensor);
     itf = SENSOR_GET_ITF(sensor);
+    rc = lis2dw12_get_int_status(itf, &int_status);
+
+    if (rc) {
+        LIS2DW12_ERR("Could not read int status err=0x%02x\n", rc);
+        return rc;
+    }
 
     if (lis2dw12->pdd.notify_ctx.snec_evtype & SENSOR_EVENT_TYPE_SLEEP) {
         /*
          * We need to read this register only if we are
          * interested in the sleep event
          */
-         rc = lis2dw12_get_int_status(itf, &int_status);
-         if (rc) {
-             LIS2DW12_ERR("Could not read int status err=0x%02x\n", rc);
-             return rc;
-         }
+
 
          if (int_status & LIS2DW12_STATUS_SLEEP_STATE) {
              /* Sleep state detected */
@@ -2610,6 +2641,14 @@ lis2dw12_sensor_handle_interrupt(struct sensor *sensor)
                                        SENSOR_EVENT_TYPE_SLEEP);
              STATS_INC(g_lis2dw12stats, sleep_notify);
          }
+
+    }
+
+    if(int_status & LIS2DW12_STATUS_FIFO_THS)
+    {
+        sensor_mgr_put_notify_evt(&lis2dw12->pdd.notify_ctx,
+                                  SENSOR_EVENT_TYPE_FIFO_FULL);
+        STATS_INC(g_lis2dw12stats, fifo_thresh_breached_notify);
     }
 
     rc = lis2dw12_clear_int(itf, &int_src);
@@ -2652,13 +2691,15 @@ lis2dw12_sensor_handle_interrupt(struct sensor *sensor)
                                   SENSOR_EVENT_TYPE_SLEEP_CHANGE);
         STATS_INC(g_lis2dw12stats, sleep_chg_notify);
     }
-
-    if (int_src & LIS2DW12_INT_SRC_6D_IA) {
-        /* Axis has crossed its threshold */
-        sensor_mgr_put_notify_evt(&lis2dw12->pdd.notify_ctx,
-                                  SENSOR_EVENT_TYPE_AXIS_THRESHOLD);
-        STATS_INC(g_lis2dw12stats, threshold_breached_notify);
-    }
+    console_printf("Int Src: %x\n", int_src);
+    // FIFO Threshold Reached Interrupt
+    // lis2dw12_get_fifo_thresh_flag(itf, &thresh_flag);
+    // if(thresh_flag == LIS2DW12_FIFO_SAMPLES_FTH)
+    // {
+    //     sensor_mgr_put_notify_evt(&lis2dw12->pdd.notify_ctx,
+    //                               SENSOR_EVENT_TYPE_FIFO_FULL);
+    //     STATS_INC(g_lis2dw12stats, fifo_thresh_breached_notify);
+    // }
 
     return 0;
 }
