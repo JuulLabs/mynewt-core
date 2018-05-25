@@ -509,6 +509,7 @@ nrf52_pwm_enable(struct pwm_dev *dev)
                   &instance->config,
                   instance->internal_handler);
     play_current_config(instance);
+    instances[inst_id].playing = true;
 
     return (0);
 }
@@ -547,6 +548,7 @@ nrf52_pwm_disable(struct pwm_dev *dev)
     }
 
     nrfx_pwm_uninit(&instances[inst_id].drv_instance);
+    instances[inst_id].playing = false;
     return (0);
 }
 
