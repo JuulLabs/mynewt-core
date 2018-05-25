@@ -1634,7 +1634,8 @@ int lis2dw12_set_wake_up_dur(struct sensor_itf *itf, uint8_t val)
     }
 
     reg &= ~LIS2DW12_WAKE_DUR_DUR;
-    reg |= (val & LIS2DW12_WAKE_DUR_DUR) << 5;
+    // reg |= (val & LIS2DW12_WAKE_DUR_DUR) << 5;
+    reg |= LIS2DW12_WAKE_DUR_DUR & (val << 5);
 
     return lis2dw12_write8(itf, LIS2DW12_REG_WAKE_UP_DUR, reg);
 
@@ -2616,8 +2617,8 @@ lis2dw12_sensor_handle_interrupt(struct sensor *sensor)
     struct sensor_itf *itf;
     uint8_t int_src;
     uint8_t int_status;
-    int rc;
-
+    uint8_t rc;
+    static uint8_t dt = 0;
     lis2dw12 = (struct lis2dw12 *)SENSOR_GET_DEVICE(sensor);
     itf = SENSOR_GET_ITF(sensor);
     rc = lis2dw12_get_int_status(itf, &int_status);
@@ -2625,22 +2626,6 @@ lis2dw12_sensor_handle_interrupt(struct sensor *sensor)
     if (rc) {
         LIS2DW12_ERR("Could not read int status err=0x%02x\n", rc);
         return rc;
-    }
-
-    if (lis2dw12->pdd.notify_ctx.snec_evtype & SENSOR_EVENT_TYPE_SLEEP) {
-        /*
-         * We need to read this register only if we are
-         * interested in the sleep event
-         */
-
-
-         if (int_status & LIS2DW12_STATUS_SLEEP_STATE) {
-             /* Sleep state detected */
-             sensor_mgr_put_notify_evt(&lis2dw12->pdd.notify_ctx,
-                                       SENSOR_EVENT_TYPE_SLEEP);
-             STATS_INC(g_lis2dw12stats, sleep_notify);
-         }
-
     }
 
     if(int_status & LIS2DW12_STATUS_FIFO_THS)
@@ -2668,6 +2653,7 @@ lis2dw12_sensor_handle_interrupt(struct sensor *sensor)
         sensor_mgr_put_notify_evt(&lis2dw12->pdd.notify_ctx,
                                   SENSOR_EVENT_TYPE_DOUBLE_TAP);
         STATS_INC(g_lis2dw12stats, double_tap_notify);
+        dt++;
     }
 
     if (int_src & LIS2DW12_INT_SRC_FF_IA) {
@@ -2677,20 +2663,21 @@ lis2dw12_sensor_handle_interrupt(struct sensor *sensor)
         STATS_INC(g_lis2dw12stats, free_fall_notify);
     }
 
-    if (int_src & LIS2DW12_INT_SRC_WU_IA) {
-        /* Wake up is detected */
-        sensor_mgr_put_notify_evt(&lis2dw12->pdd.notify_ctx,
-                                  SENSOR_EVENT_TYPE_WAKEUP);
-        STATS_INC(g_lis2dw12stats, wakeup_notify);
+    if (int_src & LIS2DW12_INT_SRC_SLP_CHG) {
+        if (int_status & LIS2DW12_STATUS_SLEEP_STATE) {
+            sensor_mgr_put_notify_evt(&lis2dw12->pdd.notify_ctx,
+                                      SENSOR_EVENT_TYPE_SLEEP_CHANGE);
+            STATS_INC(g_lis2dw12stats, sleep_notify);
+        } else {
+            sensor_mgr_put_notify_evt(&lis2dw12->pdd.notify_ctx,
+                                      SENSOR_EVENT_TYPE_WAKEUP);
+            STATS_INC(g_lis2dw12stats, wakeup_notify);
+        }
     }
 
-    if (int_src & LIS2DW12_INT_SRC_SLP_CHG) {
-        /* Sleep change detected, either wakeup or sleep */
-        sensor_mgr_put_notify_evt(&lis2dw12->pdd.notify_ctx,
-                                  SENSOR_EVENT_TYPE_SLEEP_CHANGE);
-        STATS_INC(g_lis2dw12stats, sleep_chg_notify);
-    }
-    console_printf("Int Src: %x\n", int_src);
+    console_printf("Int Src: 0x%x\n", int_src);
+    console_printf("Int Status: 0x%x\n", int_status);
+    console_printf("DT Detected: %d\n\n", dt);
 
     return 0;
 }
