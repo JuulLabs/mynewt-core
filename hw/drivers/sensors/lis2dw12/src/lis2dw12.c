@@ -2616,7 +2616,6 @@ lis2dw12_sensor_handle_interrupt(struct sensor *sensor)
     struct sensor_itf *itf;
     uint8_t int_src;
     uint8_t int_status;
-    // uint8_t thresh_flag;
     int rc;
 
     lis2dw12 = (struct lis2dw12 *)SENSOR_GET_DEVICE(sensor);
@@ -2692,14 +2691,6 @@ lis2dw12_sensor_handle_interrupt(struct sensor *sensor)
         STATS_INC(g_lis2dw12stats, sleep_chg_notify);
     }
     console_printf("Int Src: %x\n", int_src);
-    // FIFO Threshold Reached Interrupt
-    // lis2dw12_get_fifo_thresh_flag(itf, &thresh_flag);
-    // if(thresh_flag == LIS2DW12_FIFO_SAMPLES_FTH)
-    // {
-    //     sensor_mgr_put_notify_evt(&lis2dw12->pdd.notify_ctx,
-    //                               SENSOR_EVENT_TYPE_FIFO_FULL);
-    //     STATS_INC(g_lis2dw12stats, fifo_thresh_breached_notify);
-    // }
 
     return 0;
 }
