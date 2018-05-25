@@ -28,6 +28,7 @@
 #include "bootutil/image.h"
 #include "bootutil/bootutil.h"
 #include "mgmt/mgmt.h"
+#include "console/console.h"
 #if MYNEWT_VAL(LOG_FCB_SLOT1)
 #include "log/log_fcb_slot1.h"
 #endif
@@ -406,6 +407,7 @@ imgr_erase_state(struct mgmt_cbuf *cb)
 static int
 imgr_upload(struct mgmt_cbuf *cb)
 {
+    console_printf("Starting DFU\n");
     uint8_t img_data[MYNEWT_VAL(IMGMGR_MAX_CHUNK_SIZE)];
     long long unsigned int off = UINT_MAX;
     long long unsigned int size = UINT_MAX;

@@ -20,6 +20,7 @@
 #include <mcu/cortex_m4.h>
 #include "hal/hal_system.h"
 #include "nrf.h"
+#include "console/console.h"
 
 /**
  * Function called at startup. Called after BSS and .data initialized but
@@ -42,6 +43,7 @@ hal_system_init(void)
 void
 hal_system_reset(void)
 {
+    console_printf("Rebooting\n");
     while (1) {
         if (hal_debugger_connected()) {
             /*

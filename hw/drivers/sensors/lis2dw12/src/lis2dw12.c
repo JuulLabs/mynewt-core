@@ -1922,14 +1922,15 @@ int lis2dw12_run_self_test(struct sensor_itf *itf, int *result)
     int rc;
     /*configure min and max values for reading 5 samples, and accounting for
      * both negative and positive offset */
-    int min = LIS2DW12_ST_MIN*5*2;
-    int max = LIS2DW12_ST_MAX*5*2;
+    int16_t min = LIS2DW12_ST_MIN*5*2;
+    int16_t max = LIS2DW12_ST_MAX*5*2;
 
-    int16_t data[3], diff[3] = {0,0,0};
-    int i;
+    int16_t min[] = {0,0,0}, max[] = {0,0,0}, baseline[] = {0,0,0}, data[3];
+    int i,j;
     uint8_t prev_config[6];
-    /* set config per datasheet, with positive self test mode enabled. */
-    uint8_t st_config[] = {0x44, 0x08, 0x40, 0x00, 0x00, 0x10};
+    /* set config per datasheet, with positive self test mode enabled.
+     * Per ST's AN5038*/
+    uint8_t st_config[] = {0x44, 0x08, 0x00, 0x00, 0x00, 0x10};
 
     rc = lis2dw12_readlen(itf, LIS2DW12_REG_CTRL_REG1, prev_config, 6);
     if (rc) {
@@ -1941,14 +1942,37 @@ int lis2dw12_run_self_test(struct sensor_itf *itf, int *result)
         return rc;
     }
 
-    /* go into self test mode 1 */
-    rc = lis2dw12_set_self_test(itf, LIS2DW12_ST_MODE_MODE1);
+    /* disable self test */
+    rc = lis2dw12_set_self_test(itf, LIS2DW12_ST_MODE_DISABLE);
     if (rc) {
         return rc;
     }
 
-    /* wait 100ms */
-    os_time_delay(OS_TICKS_PER_SEC / 100);
+    /* wait 100ms discard 1 sample */
+    os_time_delay(OS_TICKS_PER_SEC / 10);
+    rc = lis2dw12_get_data(itf, 2, &(data[0]), &(data[1]), &(data[2]));
+    if (rc) {
+        return rc;
+    }
+
+    for (i=0; i<5; i++) {
+            /* wait at least 20 ms */
+            os_time_delay(OS_TICKS_PER_SEC / 50 + 1);
+
+            rc = lis2dw12_get_data(itf, 2, &(data[0]), &(data[1]), &(data[2]));
+            if (rc) {
+                return rc;
+            }
+            baseline[0] += data[0];
+            baseline[1] += data[1];
+            baseline[2] += data[2];
+    }
+
+    /* Enable positive offset self test */
+    rc = lis2dw12_set_self_test(itf, LIS2DW12_ST_MODE_MODE1);
+
+    /* wait 100ms discard 1 sample */
+    os_time_delay(OS_TICKS_PER_SEC / 10);
     rc = lis2dw12_get_data(itf, 2, &(data[0]), &(data[1]), &(data[2]));
     if (rc) {
         return rc;
@@ -1957,53 +1981,38 @@ int lis2dw12_run_self_test(struct sensor_itf *itf, int *result)
     /* take positive offset reading */
     for(i=0; i<5; i++) {
 
+        /* wait at least 20 ms */
+        os_time_delay(OS_TICKS_PER_SEC / 50 + 1);
+
         rc = lis2dw12_get_data(itf, 2, &(data[0]), &(data[1]), &(data[2]));
         if (rc) {
             return rc;
         }
-        diff[0] += data[0];
-        diff[1] += data[1];
-        diff[2] += data[2];
-        /* wait at least 20 ms */
-        os_time_delay(OS_TICKS_PER_SEC / 50 + 1);
-    }
-
-    /* go into self test mode 2 */
-    rc = lis2dw12_set_self_test(itf, LIS2DW12_ST_MODE_MODE2);
-    if (rc) {
-        return rc;
-    }
-
-    os_time_delay(OS_TICKS_PER_SEC / 50 + 1);
-    rc = lis2dw12_get_data(itf, 2, &(data[0]), &(data[1]), &(data[2]));
-    if (rc) {
-        return rc;
-    }
-
-    /* take negative offset reading */
-    for (i=0; i<5; i++) {
-
-            rc = lis2dw12_get_data(itf, 2, &(data[0]), &(data[1]), &(data[2]));
-            if (rc) {
-                return rc;
+        /* find min and max values for ST reading */
+        for (j=0; j<3; j++) {
+            if (data[j]<min[j]) {
+                min[j] = data[j];
             }
-            diff[0] -= data[0];
-            diff[1] -= data[1];
-            diff[2] -= data[2];
-            /* wait at least 20 ms */
-            os_time_delay(OS_TICKS_PER_SEC / 50 + 1);
+            if (data[j]>max[j]) {
+                max[j] = data[j];
+            }
         }
+    }
+
+    baseline[0] /= 5;
+    baseline[1] /= 5;
+    baseline[2] /= 5;
 
     /* disable self test mod */
     rc = lis2dw12_writelen(itf, LIS2DW12_REG_CTRL_REG1, prev_config, 6);
-        if (rc) {
-            return rc;
-        }
+    if (rc) {
+        return rc;
+    }
 
     /* compare values to thresholds */
     *result = 0;
     for (i = 0; i < 3; i++) {
-        if ((diff[i] < min) || (diff[i] > max)) {
+        if ((baseline[i] < min) || (baseline[i] > max)) {
             *result -= 1;
         }
     }
