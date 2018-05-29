@@ -2675,9 +2675,9 @@ lis2dw12_sensor_handle_interrupt(struct sensor *sensor)
         }
     }
 
-    console_printf("Int Src: 0x%x\n", int_src);
-    console_printf("Int Status: 0x%x\n", int_status);
-    console_printf("DT Detected: %d\n\n", dt);
+    // console_printf("Int Src: 0x%x\n", int_src);
+    // console_printf("Int Status: 0x%x\n", int_status);
+    // console_printf("DT Detected: %d\n\n", dt);
 
     return 0;
 }
