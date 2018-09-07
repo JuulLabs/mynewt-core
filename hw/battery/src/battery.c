@@ -413,6 +413,8 @@ static void
 battery_mgr_poll_battery_driver(struct battery *bat,
         struct battery_driver *drv, uint32_t changed[], uint32_t queried[])
 {
+// Disable gas gauge polling for rel_batt_cycle test
+#if 0
     int i;
     battery_property_value_t old_val;
     struct battery_property *prop = &bat->b_properties[drv->bd_first_property];
@@ -432,6 +434,7 @@ battery_mgr_poll_battery_driver(struct battery *bat,
             }
         }
     }
+#endif
 }
 
 static void
