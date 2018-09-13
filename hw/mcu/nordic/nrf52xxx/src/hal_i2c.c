@@ -47,6 +47,8 @@
       (GPIO_PIN_CNF_DIR_Output     << GPIO_PIN_CNF_DIR_Pos))
 #define NRF52_SDA_PIN_CONF_CLR    NRF52_SCL_PIN_CONF_CLR
 
+extern const struct nrf52_hal_i2c_cfg hal_i2c0_cfg;
+
 struct nrf52_hal_i2c {
     NRF_TWI_Type *nhi_regs;
 };
@@ -151,6 +153,8 @@ __ASM volatile (
 #endif
     : "+r" (delay));
 }
+
+extern int dbg_rst_count;
 
 static int
 hal_i2c_resolve(uint8_t i2c_num, struct nrf52_hal_i2c **out_i2c)
@@ -337,7 +341,13 @@ hal_i2c_master_write(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
     start = os_time_get();
     for (i = 0; i < pdata->len; i++) {
         regs->EVENTS_TXDSENT = 0;
-        regs->TXD = pdata->buffer[i];
+        if (regs->ADDRESS == 0x55) {
+            if (dbg_rst_count++ < 32 || dbg_rst_count > 48) {
+                regs->TXD = pdata->buffer[i];
+            }
+        } else {
+            regs->TXD = pdata->buffer[i];
+        }
         while (!regs->EVENTS_TXDSENT && !regs->EVENTS_ERROR) {
             if (os_time_get() - start > timo) {
                 rc = HAL_I2C_ERR_TIMEOUT;
@@ -377,9 +387,17 @@ err:
         * reset which puts the TWI in an unresponsive state.  Disabling and
         * re-enabling the TWI returns it to normal operation.
         */
-        regs->ENABLE = TWI_ENABLE_ENABLE_Disabled;
-        regs->ENABLE = TWI_ENABLE_ENABLE_Enabled;
+        //      dbg_rst_count++;
+        if (dbg_rst_count < 64) {
+            regs->ENABLE = TWI_ENABLE_ENABLE_Disabled;
+            regs->ENABLE = TWI_ENABLE_ENABLE_Enabled;
+        } else {
+            hal_i2c_clear_bus( &hal_i2c0_cfg );
+            regs->ENABLE = TWI_ENABLE_ENABLE_Disabled;
+            regs->ENABLE = TWI_ENABLE_ENABLE_Enabled;
+        }
     }
+
 
     return (rc);
 }
