@@ -92,3 +92,6 @@ syscfg.defs:
             value may affect RTT console responsiveness, using small value may
             affect device performance due to more frequent polling.
         value: 250
+    CONSOLE_TICKS_PAD:
+       description: pad the console ticks output with zeros to this length
+       value: 8
