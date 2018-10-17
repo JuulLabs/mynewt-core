@@ -372,7 +372,7 @@ lps33thw_i2c_get_regs(struct sensor_itf *itf, uint8_t reg, uint8_t size,
     }
 #endif
     rc = i2cn_master_write_read(itf->si_num, &data_struct,
-                                (MYNEWT_VAL(LPS33THW_I2C_TIMEOUT_TICKS)) * (size + 1), 1,
+                                (MYNEWT_VAL(LPS33THW_I2C_TIMEOUT_TICKS)) * (size + 1),
                                 MYNEWT_VAL(LPS33THW_I2C_RETRIES));
 
     if (rc) {

@@ -407,7 +407,7 @@ ms5840_readlen(struct sensor_itf *itf, uint8_t addr, uint8_t *buffer,
         goto err;
     }
 #endif
-    rc = i2cn_master_write_read(itf->si_num, &data_struct, MYNEWT_VAL(MS5840_I2C_TIMEOUT_TICKS) * (len + 1), 1,
+    rc = i2cn_master_write_read(itf->si_num, &data_struct, MYNEWT_VAL(MS5840_I2C_TIMEOUT_TICKS) * (len + 1),
                                 MYNEWT_VAL(MS5840_I2C_RETRIES));
     if (rc) {
         MS5840_LOG(ERROR, "Failed to write-read from 0x%02X:0x%02X\n",

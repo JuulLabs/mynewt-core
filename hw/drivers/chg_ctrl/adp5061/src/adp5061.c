@@ -192,17 +192,29 @@ adp5061_get_reg(struct adp5061_dev *dev, uint8_t addr, uint8_t *value)
 {
     int rc = 0;
     uint8_t payload;
+#if 0
     struct hal_i2c_master_data data_struct = {
         .address = dev->a_chg_ctrl.cc_itf.cci_addr,
         .len = 1,
         .buffer = &payload
     };
+#else
+    struct hal_i2c_master_data data_struct = {
+        .address = dev->a_chg_ctrl.cc_itf.cci_addr,
+        .len1 = 1,
+        .buffer1 = &addr,
+        .len2 = 1,
+        .buffer2 = &payload
+    };
 
+#endif
     rc = ad5061_itf_lock(&dev->a_chg_ctrl.cc_itf, OS_TIMEOUT_NEVER);
     if (rc) {
         return rc;
     }
 
+// ben-xxxxxx
+#if 0
     /* Register write */
     payload = addr;
     rc = i2cn_master_write(dev->a_chg_ctrl.cc_itf.cci_num, &data_struct,
@@ -213,11 +225,17 @@ adp5061_get_reg(struct adp5061_dev *dev, uint8_t addr, uint8_t *value)
 
     /* Read one byte back */
     payload = addr;
+
     rc = i2cn_master_read(dev->a_chg_ctrl.cc_itf.cci_num, &data_struct,
             MYNEWT_VAL(ADP5061_I2C_TIMEOUT_TICKS), 1, MYNEWT_VAL(ADP5061_I2C_RETRIES));
+#else
+    /* Read one byte back */
+    rc = i2cn_master_write_read(dev->a_chg_ctrl.cc_itf.cci_num, &data_struct,
+            MYNEWT_VAL(ADP5061_I2C_TIMEOUT_TICKS), MYNEWT_VAL(ADP5061_I2C_RETRIES));
+#endif
     *value = payload;
 
-err:
+//err:
     adp5061_itf_unlock(&dev->a_chg_ctrl.cc_itf);
 
     return rc;

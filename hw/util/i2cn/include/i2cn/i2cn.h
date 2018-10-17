@@ -55,8 +55,6 @@ int i2cn_master_read(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
  *                                  operation.
  * @param timeout               The time, in OS ticks, to wait for the MCU to
  *                                  indicate completion of each clocked byte.
- * @param last_op               1 if this is the final message in the
- *                                  transaction.
  *
  * @return                      0 on success;
  *                              HAL_I2C_ERR_[...] code on failure.
@@ -66,7 +64,7 @@ int i2cn_master_write(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
 
 int
 i2cn_master_write_read(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
-                       uint32_t timeout, uint8_t last_op, int retries);
+                       uint32_t timeout, int retries);
 
 #ifdef __cplusplus
 }

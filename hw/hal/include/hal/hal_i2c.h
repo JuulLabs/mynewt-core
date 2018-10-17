@@ -253,8 +253,8 @@ int hal_i2c_master_read(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
 int hal_i2c_master_probe(uint8_t i2c_num, uint8_t address,
                          uint32_t timeout);
 int
-hal_i2c_master_write_read(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
-                          uint32_t timo, uint8_t last_op);
+hal_i2c_master_write_read(uint8_t i2c_num, struct hal_i2c_master_data *pdata, uint32_t timo);
+
 
 #ifdef __cplusplus
 }

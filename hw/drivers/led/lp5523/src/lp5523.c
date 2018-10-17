@@ -59,7 +59,6 @@ lp5523_set_reg(struct led_itf *itf, enum lp5523_registers addr,
         .len = 2,
         .buffer = payload
     };
-
     rc = led_itf_lock(itf, MYNEWT_VAL(LP5523_ITF_LOCK_TMO));
     if (rc) {
         return rc;
@@ -123,7 +122,7 @@ lp5523_get_reg(struct led_itf *itf, enum lp5523_registers addr,
          STATS_INC(g_lp5523stats, read_errors);
     }
 #endif
-    rc = i2cn_master_write_read(itf->li_num, &data_struct, MYNEWT_VAL(LP5523_I2C_TIMEOUT_TICKS), 0,
+    rc = i2cn_master_write_read(itf->li_num, &data_struct, MYNEWT_VAL(LP5523_I2C_TIMEOUT_TICKS),
                                 MYNEWT_VAL(LP5523_I2C_RETRIES));
 
     if (rc) {
@@ -186,17 +185,28 @@ lp5523_get_n_regs(struct led_itf *itf, enum lp5523_registers addr,
     int rc;
     uint8_t addr_b = (uint8_t) addr;
 
+#if 0
     struct hal_i2c_master_data data_struct = {
         .address = itf->li_addr,
         .len = 1,
         .buffer = &addr_b
     };
+#else
+    struct hal_i2c_master_data data_struct = {
+        .address = itf->li_addr,
+        .len1 = 1,
+        .buffer1 = &addr_b,
+        .len2 = len,
+        .buffer2 = vals
+    };
+#endif
 
     rc = led_itf_lock(itf, MYNEWT_VAL(LP5523_ITF_LOCK_TMO));
     if (rc) {
         return rc;
     }
 
+#if 0
     rc = i2cn_master_write(itf->li_num, &data_struct, MYNEWT_VAL(LP5523_I2C_TIMEOUT_TICKS),
                            0, MYNEWT_VAL(LP5523_I2C_RETRIES));
 
@@ -217,8 +227,12 @@ lp5523_get_n_regs(struct led_itf *itf, enum lp5523_registers addr,
                     addr_b);
          STATS_INC(g_lp5523stats, read_errors);
     }
+#else
+    rc = i2cn_master_write_read(itf->li_num, &data_struct, MYNEWT_VAL(LP5523_I2C_TIMEOUT_TICKS),
+                                MYNEWT_VAL(LP5523_I2C_RETRIES));
+#endif
 
-err:
+//err:
     led_itf_unlock(itf);
 
     return rc;
@@ -575,7 +589,7 @@ lp5523_reset(struct led_itf *itf)
     int rc;
 
     rc = lp5523_set_reg(itf, LP5523_RESET, 0xff);
-
+    rc = 0;
     os_time_delay(1);
 
     return rc;
