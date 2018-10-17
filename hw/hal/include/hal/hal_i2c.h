@@ -90,6 +90,14 @@ struct hal_i2c_settings {
     /** Frequency in kHz */
     uint32_t frequency;
 };
+/** Overrun error */
+#define HAL_I2C_ERR_OVERRUN             6
+
+/** I2C bus in suspended state, but last op was 0 */
+#define HAL_I2C_ERR_SUSPEND             7
+
+/** I2C bus in stopped state, but last op was 1   */
+#define HAL_I2C_ERR_STOP                8
 
 /**
  * When sending a packet, use this structure to pass the arguments.
