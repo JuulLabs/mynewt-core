@@ -33,8 +33,11 @@
 #define I2C_WRITE 0
 #define I2C_READ  1
 
-#define WAIT_FOR_EVT(__r, __e)\
+#define WAIT_FOR_EVT(__r, __e, __op)\
     while (!(__r)->EVENTS_####__e) {\
+        console_printf("while op: %u macro: STOPPED: %lu SUSPENDED: %lu LASTTX: %lu LASTRX: %lu\n",\
+                   __op, regs->EVENTS_STOPPED, regs->EVENTS_SUSPENDED, regs->EVENTS_LASTTX,\
+                   regs->EVENTS_LASTRX);\
         now = os_time_get();\
         if (OS_TIME_TICK_GT(now, abs_timo)) {\
             rc = HAL_I2C_ERR_TIMEOUT;\
@@ -459,12 +462,12 @@ hal_i2c_handle_transact_start(struct nrf52_hal_i2c *i2c, uint8_t op,
     if (op == I2C_WRITE) {
         /* Start an I2C transmit transaction */
         regs->TASKS_STARTTX = 1;
-        WAIT_FOR_EVT(regs, TXSTARTED);
+        WAIT_FOR_EVT(regs, TXSTARTED, op);
         regs->EVENTS_TXSTARTED = 0;
     } else {
         /* Start an I2C receive transaction */
         regs->TASKS_STARTRX = 1;
-        WAIT_FOR_EVT(regs, RXSTARTED);
+        WAIT_FOR_EVT(regs, RXSTARTED, op);
         regs->EVENTS_RXSTARTED = 0;
     }
 
@@ -474,9 +477,8 @@ err:
 }
 
 static int
-hal_i2c_handle_transact_end(NRF_TWIM_Type *regs, uint32_t start,
-                            uint32_t abs_timo, uint8_t last_op,
-                            uint8_t op)
+hal_i2c_handle_transact_end(NRF_TWIM_Type *regs, uint8_t op, uint32_t start,
+                            uint32_t abs_timo, uint8_t last_op)
 {
     int rc;
     uint32_t evt;
@@ -505,7 +507,7 @@ hal_i2c_handle_transact_end(NRF_TWIM_Type *regs, uint32_t start,
         }
 
         if (evt) {
-            if (evt == regs->EVENTS_STOPPED) {
+            if (&evt == &regs->EVENTS_STOPPED) {
                 regs->EVENTS_LASTTX = 0;
                 regs->EVENTS_LASTRX = 0;
             }
@@ -516,6 +518,11 @@ hal_i2c_handle_transact_end(NRF_TWIM_Type *regs, uint32_t start,
             goto err;
         }
 
+        console_printf("while end: last_op: %u STOPPED: %lu SUSPENDED: %lu"
+                       "LASTTX: %lu LASTRX: %lu\n", last_op, regs->EVENTS_STOPPED,
+                       regs->EVENTS_SUSPENDED, regs->EVENTS_LASTTX,
+                       regs->EVENTS_LASTRX);
+
         now = os_time_get();
         if (OS_TIME_TICK_GT(now, abs_timo)) {
             rc = HAL_I2C_ERR_TIMEOUT;
@@ -525,6 +532,8 @@ hal_i2c_handle_transact_end(NRF_TWIM_Type *regs, uint32_t start,
 
     return 0;
 err:
+    console_printf("i2c failure: rc:%u evt_stopped: %lu evt_suspended: %lu\n",
+                   rc, regs->EVENTS_STOPPED, regs->EVENTS_SUSPENDED);
     return rc;
 }
 
@@ -543,8 +552,9 @@ hal_i2c_bus_error_detect(struct nrf52_hal_i2c *i2c)
          */
         rc = HAL_I2C_ERR_SUSPEND;
         goto err;
-    } else if (i2c->nhi_prev_last_op  == 1 &&
-               (!regs->EVENTS_STOPPED && regs->EVENTS_SUSPENDED)) {
+    } else if ((i2c->nhi_prev_last_op == 1 &&
+               !regs->EVENTS_STOPPED) && regs->EVENTS_SUSPENDED) {
+
         /*
          * return HAL_I2C_ERR_STOP if previous last_op was 1 and
          * the bus is not in the stopped state or in initial state
