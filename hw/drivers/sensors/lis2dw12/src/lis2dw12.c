@@ -235,8 +235,8 @@ lis2dw12_i2c_writelen(struct sensor_itf *itf, uint8_t addr, uint8_t *buffer,
     rc = i2cn_master_write(itf->si_num, &data_struct, MYNEWT_VAL(LIS2DW12_I2C_TIMEOUT_TICKS), 1,
                            MYNEWT_VAL(LIS2DW12_I2C_RETRIES));
     if (rc) {
-        LIS2DW12_LOG(ERROR, "I2C access failed at address 0x%02X\n",
-                     data_struct.address);
+        LIS2DW12_LOG(ERROR, "I2C write failed err=%d at addr:0x%02X:0x%02X\n",
+                     rc, data_struct.address, payload[0]);
         STATS_INC(g_lis2dw12stats, write_errors);
         goto err;
     }
@@ -290,7 +290,7 @@ lis2dw12_spi_writelen(struct sensor_itf *itf, uint8_t addr, uint8_t *payload,
         rc = hal_spi_tx_val(itf->si_num, payload[i]);
         if (rc == 0xFFFF) {
             rc = SYS_EINVAL;
-            LIS2DW12_LOG(ERROR, "SPI_%u write failed addr:0x%02X:0x%02X\n",
+            LIS2DW12_LOG(ERROR, "SPI_%u write failed addr:0x%02X\n",
                          itf->si_num, addr);
             STATS_INC(g_lis2dw12stats, write_errors);
             goto err;
@@ -365,8 +365,8 @@ lis2dw12_i2c_readlen(struct sensor_itf *itf, uint8_t reg, uint8_t *buffer,
     rc = i2cn_master_write(itf->si_num, &data_struct, MYNEWT_VAL(LIS2DW12_I2C_TIMEOUT_TICKS), 1,
                            MYNEWT_VAL(LIS2DW12_I2C_RETRIES));
     if (rc) {
-        LIS2DW12_LOG(ERROR, "I2C access failed at address 0x%02X\n",
-                     itf->si_addr);
+        LIS2DW12_LOG(ERROR, "I2C %u write failed at address 0x%02X:0x%02X\n",
+                     itf->si_num, itf->si_addr, reg);
         STATS_INC(g_lis2dw12stats, write_errors);
         return rc;
     }
@@ -378,8 +378,8 @@ lis2dw12_i2c_readlen(struct sensor_itf *itf, uint8_t reg, uint8_t *buffer,
                           MYNEWT_VAL(LIS2DW12_I2C_RETRIES));
 
     if (rc) {
-        LIS2DW12_LOG(ERROR, "Failed to read from 0x%02X:0x%02X\n",
-                     itf->si_addr, reg);
+        LIS2DW12_LOG(ERROR, "I2C %u read failed at address 0x%02X:0x%02X\n",
+                     itf->si_num, itf->si_addr, reg);
         STATS_INC(g_lis2dw12stats, read_errors);
     }
 

@@ -64,19 +64,19 @@ extern "C" {
 
 /*** I2C status codes (0=success). */
 
-/** Unknown error. */
+/* Unknown error. */
 #define HAL_I2C_ERR_UNKNOWN             1
 
-/** Invalid argument. */
+/* Invalid argument. */
 #define HAL_I2C_ERR_INVAL               2
 
-/** MCU failed to report result of I2C operation. */
+/* MCU failed to report result of I2C operation. */
 #define HAL_I2C_ERR_TIMEOUT             3
 
-/** Slave responded to address with NACK. */
+/* Slave responded to address with NACK. */
 #define HAL_I2C_ERR_ADDR_NACK           4
 
-/** Slave responded to data byte with NACK. */
+/* Slave responded to data byte with NACK. */
 #define HAL_I2C_ERR_DATA_NACK           5
 
 /** I2C controller hardware settings */
@@ -93,11 +93,21 @@ struct hal_i2c_settings {
 /** Overrun error */
 #define HAL_I2C_ERR_OVERRUN             6
 
-/** I2C bus in suspended state, but last op was 0 */
+/* I2C bus in suspended state, but last op was 0 */
 #define HAL_I2C_ERR_SUSPEND             7
 
-/** I2C bus in stopped state, but last op was 1   */
+/* I2C bus in stopped state, but last op was 1   */
 #define HAL_I2C_ERR_STOP                8
+
+/* At boot up or on facing an error I2C bus in
+ * suspended state
+ */
+#define HAL_I2C_ERR_INIT_SUSPEND        9
+
+/* At boot up or on facing an error I2C bus in
+ * suspended state
+ */
+#define HAL_I2C_ERR_INIT_STOP          10
 
 /**
  * When sending a packet, use this structure to pass the arguments.

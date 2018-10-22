@@ -392,6 +392,10 @@ syscfg.defs:
             - "!XTAL_RC"
             - "!XTAL_32768"
 
+    NRF52_HANDLE_ANOMALY_109:
+        description: 'TWIM NRF52XXX anomaly 109 fix'
+        value: 1
+
 syscfg.restrictions:
     - "MCU_NRF52832 ^^ MCU_NRF52840"
     - "!I2C_0 || (I2C_0_PIN_SCL && I2C_0_PIN_SDA)"

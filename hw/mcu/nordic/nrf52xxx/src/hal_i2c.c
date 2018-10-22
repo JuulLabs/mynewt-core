@@ -33,18 +33,6 @@
 #define I2C_WRITE 0
 #define I2C_READ  1
 
-#define WAIT_FOR_EVT(__r, __e, __op)\
-    while (!(__r)->EVENTS_####__e) {\
-        console_printf("while op: %u macro: STOPPED: %lu SUSPENDED: %lu LASTTX: %lu LASTRX: %lu\n",\
-                   __op, regs->EVENTS_STOPPED, regs->EVENTS_SUSPENDED, regs->EVENTS_LASTTX,\
-                   regs->EVENTS_LASTRX);\
-        now = os_time_get();\
-        if (OS_TIME_TICK_GT(now, abs_timo)) {\
-            rc = HAL_I2C_ERR_TIMEOUT;\
-            goto err;\
-        }\
-    }
-
 #define NRF52_HAL_I2C_MAX (2)
 
 #define NRF52_SCL_PIN_CONF                                              \
@@ -70,6 +58,7 @@ struct nrf52_hal_i2c {
      * transaction actually put the I2C bus in the suspended state
      */
     int nhi_prev_last_op;
+    uint32_t nhi_freq;
 };
 
 #if MYNEWT_VAL(I2C_0)
@@ -325,7 +314,13 @@ hal_i2c_init(uint8_t i2c_num, void *usercfg)
 
     regs->PSEL.SCL = cfg->scl_pin;
     regs->PSEL.SDA = cfg->sda_pin;
+#if MYNEWT_VAL(NRF52_HANDLE_ANOMALY_109)
+    i2c->nhi_freq = freq;
+    regs->FREQUENCY = 0;
+#else
     regs->FREQUENCY = freq;
+#endif
+    regs->ADDRESS = 0;
     regs->ENABLE = TWIM_ENABLE_ENABLE_Enabled;
     i2c->nhi_prev_last_op = -1;
 
@@ -435,6 +430,17 @@ hal_i2c_config(uint8_t i2c_num, const struct hal_i2c_settings *cfg)
     regs->FREQUENCY = freq;
 
     return 0;
+
+static void
+hal_i2c_handle_anomaly_109(NRF_TWIM_Type *regs, uint32_t prev_freq, uint8_t address)
+{
+    if (regs->FREQUENCY == 0) {
+        regs->ENABLE = TWIM_ENABLE_ENABLE_Disabled;
+        regs->ENABLE = TWIM_ENABLE_ENABLE_Enabled;
+        regs->ADDRESS = address;
+        regs->FREQUENCY = prev_freq;
+        regs->TASKS_STARTTX = 1;
+    }
 }
 
 /*
@@ -442,58 +448,61 @@ hal_i2c_config(uint8_t i2c_num, const struct hal_i2c_settings *cfg)
  */
 static int
 hal_i2c_handle_transact_start(struct nrf52_hal_i2c *i2c, uint8_t op,
-                              uint32_t abs_timo)
+                              os_time_t abs_timo, uint8_t address)
 {
     NRF_TWIM_Type *regs;
-    uint32_t now;
+    os_time_t now;
     int rc;
 
     regs = i2c->nhi_regs;
 
     regs->EVENTS_ERROR = 0;
+    regs->EVENTS_STOPPED = 0;
 
     /* If a transaction was previously suspended, resume it */
     if (regs->EVENTS_SUSPENDED) {
         regs->TASKS_RESUME = 1;
+        regs->EVENTS_SUSPENDED = 0;
+        return 0;
     }
 
-    regs->EVENTS_STOPPED = 0;
-    regs->EVENTS_SUSPENDED = 0;
     if (op == I2C_WRITE) {
         /* Start an I2C transmit transaction */
         regs->TASKS_STARTTX = 1;
-        WAIT_FOR_EVT(regs, TXSTARTED, op);
+
+#if MYNEWT_VAL(NRF52_HANDLE_ANOMALY_109)
+        while (!regs->EVENTS_TXSTARTED) {
+            now = os_time_get();
+            if (OS_TIME_TICK_GT(now, abs_timo)) {
+                rc = HAL_I2C_ERR_TIMEOUT;
+                return rc;
+            }
+        }
+
         regs->EVENTS_TXSTARTED = 0;
+        if (!regs->FREQUENCY) {
+            hal_i2c_handle_anomaly_109(regs, i2c->nhi_freq, address);
+            regs->EVENTS_TXSTARTED = 0;
+        }
+#endif
     } else {
+        if (!regs->FREQUENCY) {
+            regs->FREQUENCY = i2c->nhi_freq;
+        }
         /* Start an I2C receive transaction */
         regs->TASKS_STARTRX = 1;
-        WAIT_FOR_EVT(regs, RXSTARTED, op);
-        regs->EVENTS_RXSTARTED = 0;
     }
 
     return 0;
-err:
-    return rc;
 }
 
 static int
 hal_i2c_handle_transact_end(NRF_TWIM_Type *regs, uint8_t op, uint32_t start,
-                            uint32_t abs_timo, uint8_t last_op)
+                            os_time_t abs_timo, uint8_t last_op)
 {
     int rc;
     uint32_t evt;
     os_time_t now;
-
-    if (last_op) {
-        /* this is to take care of clock stretches as per the datasheet */
-        if (regs->EVENTS_SUSPENDED) {
-            /* If there is a clock stretch, the event would be suspended for
-             * that TWIM interface, it would need to be resumed to finish the
-             * transaction
-             */
-            regs->TASKS_RESUME = 1;
-        }
-    }
 
     while(1) {
         /*
@@ -508,8 +517,11 @@ hal_i2c_handle_transact_end(NRF_TWIM_Type *regs, uint8_t op, uint32_t start,
 
         if (evt) {
             if (&evt == &regs->EVENTS_STOPPED) {
-                regs->EVENTS_LASTTX = 0;
-                regs->EVENTS_LASTRX = 0;
+#if MYNEWT_VAL(NRF52_HANDLE_ANOMALY_109)
+                if (regs->FREQUENCY) {
+                    regs->FREQUENCY = 0;
+                }
+#endif
             }
             break;
         }
@@ -517,11 +529,6 @@ hal_i2c_handle_transact_end(NRF_TWIM_Type *regs, uint8_t op, uint32_t start,
         if (regs->EVENTS_ERROR) {
             goto err;
         }
-
-        console_printf("while end: last_op: %u STOPPED: %lu SUSPENDED: %lu"
-                       "LASTTX: %lu LASTRX: %lu\n", last_op, regs->EVENTS_STOPPED,
-                       regs->EVENTS_SUSPENDED, regs->EVENTS_LASTTX,
-                       regs->EVENTS_LASTRX);
 
         now = os_time_get();
         if (OS_TIME_TICK_GT(now, abs_timo)) {
@@ -553,14 +560,21 @@ hal_i2c_bus_error_detect(struct nrf52_hal_i2c *i2c)
         rc = HAL_I2C_ERR_SUSPEND;
         goto err;
     } else if ((i2c->nhi_prev_last_op == 1 &&
-               !regs->EVENTS_STOPPED) && regs->EVENTS_SUSPENDED) {
-
+               (!regs->EVENTS_STOPPED || regs->EVENTS_SUSPENDED))) {
         /*
          * return HAL_I2C_ERR_STOP if previous last_op was 1 and
          * the bus is not in the stopped state or in initial state
          * which is EVENTS_SUSPENDED is 1 and EVENTS_STOPPED is 1
          */
         rc = HAL_I2C_ERR_STOP;
+        goto err;
+    } else if (i2c->nhi_prev_last_op == -1 &&
+               (regs->EVENTS_STOPPED || regs->EVENTS_SUSPENDED)) {
+        if (regs->EVENTS_STOPPED) {
+            rc = HAL_I2C_ERR_INIT_STOP;
+        } else {
+            rc = HAL_I2C_ERR_INIT_SUSPEND;
+        }
         goto err;
     }
 
@@ -571,9 +585,12 @@ err:
 
 /* Handle errors returned from the TWIM peripheral along with timeouts */
 static int
-hal_i2c_handle_errors(NRF_TWIM_Type *regs, int rc)
+hal_i2c_handle_errors(struct nrf52_hal_i2c *i2c, int rc, os_time_t abs_timo)
 {
     int nrf_status;
+    NRF_TWIM_Type *regs;
+
+    regs = i2c->nhi_regs;
 
     regs->TASKS_RESUME = 1;
     regs->TASKS_STOP = 1;
@@ -593,6 +610,8 @@ hal_i2c_handle_errors(NRF_TWIM_Type *regs, int rc)
         regs->ENABLE = TWIM_ENABLE_ENABLE_Disabled;
         hal_i2c_clear_bus(regs->PSEL.SCL, regs->PSEL.SDA);
         regs->ENABLE = TWIM_ENABLE_ENABLE_Enabled;
+        i2c->nhi_prev_last_op = -1;
+        regs->EVENTS_STOPPED = 0;
     }
 
     return rc;
@@ -654,7 +673,7 @@ hal_i2c_master_write(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
     }
 
     /* Starts an I2C transaction using TWIM/EasyDMA */
-    rc = hal_i2c_handle_transact_start(i2c, I2C_WRITE, start + timo);
+    rc = hal_i2c_handle_transact_start(i2c, I2C_WRITE, start + timo, pdata->address);
     if (rc) {
         goto err;
     }
@@ -670,7 +689,7 @@ hal_i2c_master_write(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
 
     return 0;
 err:
-    return hal_i2c_handle_errors(regs, rc);
+    return hal_i2c_handle_errors(i2c, rc, start + timo);
 }
 
 int
@@ -719,7 +738,7 @@ hal_i2c_master_read(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
     }
 
     /* Starts an I2C transaction using TWIM/EasyDMA */
-    rc = hal_i2c_handle_transact_start(i2c, I2C_READ, start + timo);
+    rc = hal_i2c_handle_transact_start(i2c, I2C_READ, start + timo, pdata->address);
     if (rc) {
         goto err;
     }
@@ -735,7 +754,7 @@ hal_i2c_master_read(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
 
     return 0;
 err:
-    return hal_i2c_handle_errors(regs, rc);
+    return hal_i2c_handle_errors(i2c, rc, start + timo);
 }
 
 int
