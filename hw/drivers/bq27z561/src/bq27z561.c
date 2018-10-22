@@ -142,7 +142,7 @@ bq27z561_rd_std_reg_byte(struct bq27z561 *dev, uint8_t reg, uint8_t *val)
     }
 
 
-    rc = i2cn_master_write(dev->bq27_itf.itf_num, &i2c, MYNEWT_VAL(BQ27Z561_I2C_TIMEOUT_TICKS), 1,
+    rc = i2cn_master_write(dev->bq27_itf.itf_num, &i2c, MYNEWT_VAL(BQ27Z561_I2C_TIMEOUT_TICKS), 0,
                            MYNEWT_VAL(BQ27Z561_I2C_RETRIES));
     if (rc != 0) {
         BQ27Z561_LOG(ERROR, "I2C reg read (wr) failed 0x%02X\n", reg);
@@ -178,7 +178,7 @@ bq27z561_rd_std_reg_word(struct bq27z561 *dev, uint8_t reg, uint16_t *val)
         return rc;
     }
 
-    rc = i2cn_master_write(dev->bq27_itf.itf_num, &i2c, MYNEWT_VAL(BQ27Z561_I2C_TIMEOUT_TICKS), 1,
+    rc = i2cn_master_write(dev->bq27_itf.itf_num, &i2c, MYNEWT_VAL(BQ27Z561_I2C_TIMEOUT_TICKS), 0,
                            MYNEWT_VAL(BQ27Z561_I2C_RETRIES));
     if (rc != 0) {
         BQ27Z561_LOG(ERROR, "I2C reg read (wr) failed 0x%02X\n", reg);
@@ -353,7 +353,7 @@ bq27x561_rd_alt_mfg_cmd(struct bq27z561 *dev, uint16_t cmd, uint8_t *val,
     i2c.len = 1;
     i2c.buffer = tmpbuf;
 
-    rc = i2cn_master_write(dev->bq27_itf.itf_num, &i2c, MYNEWT_VAL(BQ27Z561_I2C_TIMEOUT_TICKS), 1,
+    rc = i2cn_master_write(dev->bq27_itf.itf_num, &i2c, MYNEWT_VAL(BQ27Z561_I2C_TIMEOUT_TICKS), 0,
                            MYNEWT_VAL(BQ27Z561_I2C_RETRIES));
     if (rc != 0) {
         BQ27Z561_LOG(ERROR, "I2C reg read (wr) failed 0x%02X\n", tmpbuf[0]);
@@ -459,7 +459,7 @@ bq27x561_rd_flash(struct bq27z561 *dev, uint16_t addr, uint8_t *buf, int buflen)
     i2c.len = 1;
     i2c.buffer = tmpbuf;
 
-    rc = i2cn_master_write(dev->bq27_itf.itf_num, &i2c, MYNEWT_VAL(BQ27Z561_I2C_TIMEOUT_TICKS), 1,
+    rc = i2cn_master_write(dev->bq27_itf.itf_num, &i2c, MYNEWT_VAL(BQ27Z561_I2C_TIMEOUT_TICKS), 0,
                            MYNEWT_VAL(BQ27Z561_I2C_RETRIES));
     if (rc != 0) {
         BQ27Z561_LOG(ERROR, "I2C reg read (wr) failed 0x%02X\n", tmpbuf[0]);
