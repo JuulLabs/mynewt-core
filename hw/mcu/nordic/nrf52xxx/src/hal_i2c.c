@@ -501,7 +501,7 @@ hal_i2c_handle_transact_end(NRF_TWIM_Type *regs, uint8_t op, uint32_t start,
                             os_time_t abs_timo, uint8_t last_op)
 {
     int rc;
-    uint32_t evt;
+    volatile uint32_t *evt;
     os_time_t now;
 
     while(1) {
@@ -510,13 +510,13 @@ hal_i2c_handle_transact_end(NRF_TWIM_Type *regs, uint8_t op, uint32_t start,
          * monitored
          */
         if (last_op) {
-            evt = regs->EVENTS_STOPPED;
+            evt = &regs->EVENTS_STOPPED;
         } else {
-            evt = regs->EVENTS_SUSPENDED;
+            evt = &regs->EVENTS_SUSPENDED;
         }
 
-        if (evt) {
-            if (&evt == &regs->EVENTS_STOPPED) {
+        if (*evt) {
+            if (evt == &regs->EVENTS_STOPPED) {
 #if MYNEWT_VAL(NRF52_HANDLE_ANOMALY_109)
                 if (regs->FREQUENCY) {
                     regs->FREQUENCY = 0;
