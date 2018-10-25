@@ -496,13 +496,15 @@ hal_i2c_handle_transact_start(struct nrf52_hal_i2c *i2c, uint8_t op,
     return 0;
 }
 
+os_time_t g_start;
+
 static int
 hal_i2c_handle_transact_end(NRF_TWIM_Type *regs, uint8_t op, uint32_t start,
                             os_time_t abs_timo, uint8_t last_op)
 {
     int rc;
     volatile uint32_t *evt;
-    os_time_t now;
+    os_time_t now = 0;
 
     while(1) {
         /*
@@ -536,6 +538,10 @@ hal_i2c_handle_transact_end(NRF_TWIM_Type *regs, uint8_t op, uint32_t start,
             goto err;
         }
     }
+
+    g_start = os_cputime_get32() - g_start;
+
+    console_printf("t:%lu r:%u\n", g_start, op);
 
     return 0;
 err:
@@ -617,6 +623,8 @@ hal_i2c_handle_errors(struct nrf52_hal_i2c *i2c, int rc, os_time_t abs_timo)
     return rc;
 }
 
+os_time_t g_start;
+
 /* Perform I2C master writes using TWIM/EasyDMA */
 int
 hal_i2c_master_write(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
@@ -628,6 +636,7 @@ hal_i2c_master_write(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
     struct nrf52_hal_i2c *i2c;
 
     start = os_time_get();
+    g_start = os_cputime_get32();
 
     /* Resolve the I2C bus */
     rc = hal_i2c_resolve(i2c_num, &i2c);
@@ -702,6 +711,7 @@ hal_i2c_master_read(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
     struct nrf52_hal_i2c *i2c;
 
     start = os_time_get();
+    g_start = os_cputime_get32();
 
     /* Resolve the I2C bus */
     rc = hal_i2c_resolve(i2c_num, &i2c);
