@@ -1760,3 +1760,37 @@ lis2dh12_config(struct lis2dh12 *lis2dh12, struct lis2dh12_cfg *cfg)
 err:
     return rc;
 }
+
+/**
+ * Sets the power mode of the sensor
+ *
+ * @param The sensor interface
+ * @param power mode
+ *
+ * @return 0 on success, non-zero on failure
+ */
+int
+lis2dh12_set_power_mode(struct sensor_itf *itf, uint8_t mode)
+{
+    int rc;
+    uint8_t reg;
+
+    reg = 0xff;
+    lis2dh12_writelen(itf, LIS2DH12_REG_CTRL_REG5, &reg, 1);
+    rc = lis2dh12_readlen(itf, LIS2DH12_REG_CTRL_REG1, &reg, 1);
+    if (rc) {
+        goto err;
+    }
+    reg = 0x0F;
+//    reg |= mode;
+    rc = lis2dh12_writelen(itf, LIS2DH12_REG_CTRL_REG1, &reg, 1);
+    if (rc) {
+        goto err;
+    }
+
+    lis2dh12_writelen(itf, LIS2DH12_REG_CTRL_REG1, &reg, 1);
+
+    return 0;
+err:
+    return rc;
+}

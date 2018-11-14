@@ -321,6 +321,17 @@ lis2dh12_disable_int2(struct sensor_itf *itf);
 int
 lis2dh12_hpf_cfg(struct sensor_itf *itf, uint8_t reg);
 
+/**
+ * Sets the power mode of the sensor
+ *
+ * @param The sensor interface
+ * @param power mode
+ *
+ * @return 0 on success, non-zero on failure
+ */
+int
+lis2dh12_set_power_mode(struct sensor_itf *itf, uint8_t mode);
+
 #ifdef __cplusplus
 }
 #endif

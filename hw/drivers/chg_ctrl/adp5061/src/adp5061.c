@@ -355,7 +355,7 @@ adp5061_charge_enable(struct adp5061_dev *dev)
 {
     int rc = 0;
 
-    dev->a_cfg.functional_settings_1 |= ADP5061_FUNC_SETTINGS_1_EN_CHG_SET(1);
+    dev->a_cfg.functional_settings_1 &= ~(ADP5061_FUNC_SETTINGS_1_DIS_IC1_MASK);
     rc = adp5061_set_reg(dev, REG_FUNC_SETTINGS_1,
             dev->a_cfg.functional_settings_1);
 
@@ -367,7 +367,8 @@ adp5061_charge_disable(struct adp5061_dev *dev)
 {
     int rc = 0;
 
-    dev->a_cfg.functional_settings_1 &= ~(ADP5061_FUNC_SETTINGS_1_EN_CHG_MASK);
+    dev->a_cfg.functional_settings_1 |= ADP5061_FUNC_SETTINGS_1_DIS_IC1_MASK;
+
     rc = adp5061_set_reg(dev, REG_FUNC_SETTINGS_1,
             dev->a_cfg.functional_settings_1);
 
