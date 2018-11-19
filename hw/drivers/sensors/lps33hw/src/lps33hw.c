@@ -47,12 +47,14 @@ static struct hal_spi_settings spi_lps33hw_settings = {
 STATS_SECT_START(lps33hw_stat_section)
     STATS_SECT_ENTRY(read_errors)
     STATS_SECT_ENTRY(write_errors)
+    STATS_SECT_ENTRY(write_read_errors)
 STATS_SECT_END
 
 /* Define stat names for querying */
 STATS_NAME_START(lps33hw_stat_section)
     STATS_NAME(lps33hw_stat_section, read_errors)
     STATS_NAME(lps33hw_stat_section, write_errors)
+    STATS_NAME(lps33hw_stat_section, write_read_errors)
 STATS_NAME_END(lps33hw_stat_section)
 
 /* Global variable used to hold stats data */
@@ -183,7 +185,7 @@ lps33hw_i2c_set_reg(struct sensor_itf *itf, uint8_t reg, uint8_t value)
         LPS33HW_LOG(ERROR,
                     "Failed to write to 0x%02X:0x%02X with value 0x%02X\n",
                     itf->si_addr, reg, value);
-        STATS_INC(g_lps33hwstats, read_errors);
+        STATS_INC(g_lps33hwstats, write_errors);
     }
 
     return rc;
@@ -342,10 +344,13 @@ lps33hw_i2c_get_regs(struct sensor_itf *itf, uint8_t reg, uint8_t size,
 
     struct hal_i2c_master_data data_struct = {
         .address = itf->si_addr,
-        .len = 1,
-        .buffer = &reg
+        .len1 = 1,
+        .buffer1 = &reg,
+        .len2 = size,
+        .buffer2 = buffer
     };
 
+#if 0
     /* Register write */
     rc = i2cn_master_write(itf->si_num, &data_struct, MYNEWT_VAL(LPS33HW_I2C_TIMEOUT_TICKS), 0,
                            MYNEWT_VAL(LPS33HW_I2C_RETRIES));
@@ -367,6 +372,16 @@ lps33hw_i2c_get_regs(struct sensor_itf *itf, uint8_t reg, uint8_t size,
         LPS33HW_LOG(ERROR, "Failed to read from 0x%02X:0x%02X\n",
                     itf->si_addr, reg);
         STATS_INC(g_lps33hwstats, read_errors);
+    }
+#endif
+    rc = i2cn_master_write_read(itf->si_num, &data_struct,
+                                (MYNEWT_VAL(LPS33HW_I2C_TIMEOUT_TICKS)) * (size + 1), 1,
+                                MYNEWT_VAL(LPS33HW_I2C_RETRIES));
+
+    if (rc) {
+        LPS33HW_LOG(ERROR, "Failed to write-read from 0x%02X:0x%02X\n",
+                    itf->si_addr, reg);
+        STATS_INC(g_lps33hwstats, write_read_errors);
     }
     return rc;
 }

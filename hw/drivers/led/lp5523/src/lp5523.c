@@ -31,12 +31,14 @@
 STATS_SECT_START(lp5523_stat_section)
     STATS_SECT_ENTRY(read_errors)
     STATS_SECT_ENTRY(write_errors)
+    STATS_SECT_ENTRY(write_read_errors)
 STATS_SECT_END
 
 /* Define stat names for querying */
 STATS_NAME_START(lp5523_stat_section)
     STATS_NAME(lp5523_stat_section, read_errors)
     STATS_NAME(lp5523_stat_section, write_errors)
+    STATS_NAME(lp5523_stat_section, write_read_errors)
 STATS_NAME_END(lp5523_stat_section)
 
 /* Global variable used to hold stats data */
@@ -87,8 +89,10 @@ lp5523_get_reg(struct led_itf *itf, enum lp5523_registers addr,
 
     struct hal_i2c_master_data data_struct = {
         .address = itf->li_addr,
-        .len = 1,
-        .buffer = &addr
+        .len1 = 1,
+        .buffer1 = &addr,
+        .len2 = 1,
+        .buffer2 = value
     };
 
     rc = led_itf_lock(itf, MYNEWT_VAL(LP5523_ITF_LOCK_TMO));
@@ -96,6 +100,7 @@ lp5523_get_reg(struct led_itf *itf, enum lp5523_registers addr,
         return rc;
     }
 
+#if 0
     /* Register write */
     rc = i2cn_master_write(itf->li_num, &data_struct, MYNEWT_VAL(LP5523_I2C_TIMEOUT_TICKS), 0,
                            MYNEWT_VAL(LP5523_I2C_RETRIES));
@@ -116,6 +121,16 @@ lp5523_get_reg(struct led_itf *itf, enum lp5523_registers addr,
          LP5523_LOG(ERROR, "Failed to read from 0x%02X:0x%02X\n",
                     itf->li_addr, addr);
          STATS_INC(g_lp5523stats, read_errors);
+    }
+#endif
+    rc = i2cn_master_write_read(itf->li_num, &data_struct, MYNEWT_VAL(LP5523_I2C_TIMEOUT_TICKS), 0,
+                                MYNEWT_VAL(LP5523_I2C_RETRIES));
+
+    if (rc) {
+        LP5523_LOG(ERROR, "I2C wr failed at address 0x%02X\n",
+                   itf->li_addr);
+        STATS_INC(g_lp5523stats, write_read_errors);
+        goto err;
     }
 
 err:
@@ -557,7 +572,13 @@ lp5523_get_engine_int(struct led_itf *itf, uint8_t engine, uint8_t *flag)
 int
 lp5523_reset(struct led_itf *itf)
 {
-    return lp5523_set_reg(itf, LP5523_RESET, 0xff);
+    int rc;
+
+    rc = lp5523_set_reg(itf, LP5523_RESET, 0xff);
+
+    os_time_delay(1);
+
+    return rc;
 }
 
 int

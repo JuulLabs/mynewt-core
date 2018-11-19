@@ -504,19 +504,34 @@ hal_i2c_handle_transact_end(NRF_TWIM_Type *regs, uint8_t op, uint32_t start,
 {
     int rc;
     volatile uint32_t *evt;
-    os_time_t now = 0;
+    volatile os_time_t now = 0;
 
-    while(1) {
-        /*
-         * Use last_op as the determining factor for the type of event to be
-         * monitored
-         */
-        if (last_op) {
-            evt = &regs->EVENTS_STOPPED;
-        } else {
-            evt = &regs->EVENTS_SUSPENDED;
+    /*
+     * Use last_op as the determining factor for the type of event to be
+     * monitored
+     */
+    if (last_op) {
+        evt = &regs->EVENTS_STOPPED;
+    } else {
+        evt = &regs->EVENTS_SUSPENDED;
+    }
+
+    /* since there is no SUSPEND short for RX, we have to specifically
+     * deal with it
+     */
+    if (op == I2C_READ && !last_op) {
+        while (!regs->EVENTS_LASTRX) {
+            now = os_time_get();
+            if (OS_TIME_TICK_GT(now, abs_timo)) {
+                rc = HAL_I2C_ERR_TIMEOUT;
+                goto err;
+            }
         }
 
+        regs->TASKS_SUSPEND = 1;
+    }
+
+    while(1) {
         if (*evt) {
             if (evt == &regs->EVENTS_STOPPED) {
 #if MYNEWT_VAL(NRF52_HANDLE_ANOMALY_109)
@@ -538,10 +553,11 @@ hal_i2c_handle_transact_end(NRF_TWIM_Type *regs, uint8_t op, uint32_t start,
             goto err;
         }
     }
+    regs->TASKS_RESUME  = 1;
 
     g_start = os_cputime_get32() - g_start;
 
-    console_printf("t:%lu r:%u\n", g_start, op);
+    //console_printf("t:%lu r:%u\n", g_start, op);
 
     return 0;
 err:
@@ -745,6 +761,8 @@ hal_i2c_master_read(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
      */
     if (last_op) {
         regs->SHORTS = TWIM_SHORTS_LASTRX_STOP_Msk;
+    } else {
+        regs->SHORTS = 0;
     }
 
     /* Starts an I2C transaction using TWIM/EasyDMA */
@@ -766,6 +784,90 @@ hal_i2c_master_read(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
 err:
     return hal_i2c_handle_errors(i2c, rc, start + timo);
 }
+
+int
+hal_i2c_master_write_read(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
+                          uint32_t timo, uint8_t last_op)
+{
+    int rc;
+    os_time_t now;
+    uint32_t start;
+    NRF_TWIM_Type *regs;
+    struct nrf52_hal_i2c *i2c;
+
+    start = os_time_get();
+    g_start = os_cputime_get32();
+
+    /* Resolve the I2C bus */
+    rc = hal_i2c_resolve(i2c_num, &i2c);
+    if (rc != 0) {
+        return rc;
+    }
+
+    regs = i2c->nhi_regs;
+
+    /* Detect errors on the bus based on the previous and current
+     * condition of the bus
+     */
+    rc = hal_i2c_bus_error_detect(i2c);
+    if (rc) {
+        goto err;
+    }
+
+    /* Configure the RXD registers for EasyDMA access to work with buffers of
+     * specific length and address of the slave
+     */
+    regs->ADDRESS    = pdata->address;
+    regs->TXD.MAXCNT = pdata->len1;
+    regs->TXD.PTR    = (uint32_t)pdata->buffer1;
+    regs->TXD.LIST   = 0;
+    /* Disable and clear interrupts */
+    regs->INTENCLR   = NRF_TWIM_ALL_INTS_MASK;
+    regs->INTEN      = 0;
+    regs->SHORTS = TWIM_SHORTS_LASTTX_STARTRX_Msk;
+
+    /* Starts an I2C transaction using TWIM/EasyDMA */
+    rc = hal_i2c_handle_transact_start(i2c, I2C_WRITE, start + timo, pdata->address);
+    if (rc) {
+        goto err;
+    }
+
+    while (!regs->EVENTS_LASTTX) {
+        now = os_time_get();
+        if (OS_TIME_TICK_GT(now, start + timo)) {
+            rc = HAL_I2C_ERR_TIMEOUT;
+            return rc;
+        }
+    }
+
+    regs->RXD.MAXCNT = pdata->len2;
+    regs->RXD.PTR    = (uint32_t)pdata->buffer2;
+    regs->RXD.LIST   = 0;
+    /* Only set short for RX->STOP for last_op:1 since there is no suspend short
+     * available in nrf52832
+     */
+    if (last_op) {
+        regs->SHORTS = TWIM_SHORTS_LASTRX_STOP_Msk;
+    } else {
+        regs->SHORTS = 0;
+    }
+
+    regs->TASKS_RESUME  = 1;
+
+    /* Ends an I2C transaction using TWIM/EasyDMA */
+    rc = hal_i2c_handle_transact_end(regs, I2C_READ, start, start + timo, last_op);
+    if (rc) {
+        goto err;
+    }
+
+    /* Save the current last op to detect bus errors later */
+    i2c->nhi_prev_last_op = last_op;
+
+    return 0;
+err:
+    return hal_i2c_handle_errors(i2c, rc, start + timo);
+}
+
 
 int
 hal_i2c_master_probe(uint8_t i2c_num, uint8_t address, uint32_t timo)

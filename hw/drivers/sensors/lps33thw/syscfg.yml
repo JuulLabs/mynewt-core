@@ -42,7 +42,7 @@ syscfg.defs:
         description: >
             Number of retries to use for failed I2C communication.  A retry is
             used when the LPS33THW sends an unexpected NACK.
-        value: 2
+        value: 0
     LPS33THW_I2C_TIMEOUT_TICKS:
         description: >
             Number of OS ticks to wait for each I2C transaction to complete.

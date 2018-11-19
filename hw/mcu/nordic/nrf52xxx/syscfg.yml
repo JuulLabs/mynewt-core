@@ -410,3 +410,4 @@ syscfg.restrictions:
     - "!SPI_3_SLAVE || (SPI_3_SLAVE_PIN_SCK && SPI_3_SLAVE_PIN_MOSI && SPI_3_SLAVE_PIN_MISO && SPI_3_SLAVE_PIN_SS)"
     - "!UART_0 || (UART_0_PIN_TX && UART_0_PIN_RX)"
     - "!UART_1 || (UART_1_PIN_TX && UART_1_PIN_RX)"
+    - "HAL_I2C_DOUBLE_BUFFERED"

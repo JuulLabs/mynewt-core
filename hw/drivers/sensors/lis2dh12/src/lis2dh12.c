@@ -152,6 +152,7 @@ STATS_SECT_START(lis2dh12_stat_section)
     STATS_SECT_ENTRY(orient_chg_y_notify)
     STATS_SECT_ENTRY(orient_chg_z_notify)
 #endif
+    STATS_SECT_ENTRY(write_read_errors)
 STATS_SECT_END
 
 /* Define stat names for querying */
@@ -170,6 +171,7 @@ STATS_NAME_START(lis2dh12_stat_section)
     STATS_NAME(lis2dh12_stat_section, orient_chg_y_notify)
     STATS_NAME(lis2dh12_stat_section, orient_chg_z_notify)
 #endif
+    STATS_NAME(lis2dh12_stat_section, write_read_errors)
 STATS_NAME_END(lis2dh12_stat_section)
 
 /* Global variable used to hold stats data */
@@ -227,24 +229,27 @@ lis2dh12_i2c_readlen(struct sensor_itf *itf, uint8_t addr, uint8_t *buffer,
                      uint8_t len)
 {
     int rc;
+
     if (len > 1)
     {
         addr |= 0x80;
     }
 
-    uint8_t payload[20] = { addr, 0, 0, 0, 0, 0, 0, 0,
+    uint8_t payload[20] = {   0, 0, 0, 0, 0, 0, 0, 0,
                               0, 0, 0, 0, 0, 0, 0, 0,
                               0, 0, 0, 0};
 
     struct hal_i2c_master_data data_struct = {
         .address = itf->si_addr,
-        .len = 1,
-        .buffer = payload
+        .len1 = 1,
+        .buffer1 = &addr,
+        .len2 = len,
+        .buffer2 = payload
     };
 
     /* Clear the supplied buffer */
     memset(buffer, 0, len);
-
+#if 0
     /* Register write */
     rc = i2cn_master_write(itf->si_num, &data_struct, MYNEWT_VAL(LIS2DH12_I2C_TIMEOUT_TICKS), 1,
                            MYNEWT_VAL(LIS2DH12_I2C_RETRIES));
@@ -264,6 +269,15 @@ lis2dh12_i2c_readlen(struct sensor_itf *itf, uint8_t addr, uint8_t *buffer,
         LIS2DH12_LOG(ERROR, "Failed to read from 0x%02X:0x%02X\n",
                      data_struct.address, addr);
         STATS_INC(g_lis2dh12stats, read_errors);
+        goto err;
+    }
+#endif
+    rc = i2cn_master_write_read(itf->si_num, &data_struct, MYNEWT_VAL(LIS2DH12_I2C_TIMEOUT_TICKS) * (len + 1), 1,
+                                MYNEWT_VAL(LIS2DH12_I2C_RETRIES));
+    if (rc) {
+        LIS2DH12_LOG(ERROR, "Failed to read from 0x%02X:0x%02X\n",
+                     data_struct.address, addr);
+        STATS_INC(g_lis2dh12stats, write_read_errors);
         goto err;
     }
 

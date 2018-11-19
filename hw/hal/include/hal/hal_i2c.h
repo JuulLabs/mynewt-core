@@ -125,10 +125,25 @@ struct hal_i2c_master_data {
      * only the top 7-bits to this function as 0x40
      */
     uint8_t  address;
-    /** Number of buffer bytes to transmit or receive */
+//#if MYNEWT_VAL(HAL_I2C_DOUBLE_BUFFERED)
+    /** Number of buffer bytes to transmit or receive using buffer 1*/
     uint16_t len;
+    /** Number of buffer bytes to transmit or receive using buffer 2*/
+    uint16_t len1;
+//#else
+    /** Number of buffer bytes to transmit or receive */
+    uint16_t len2;
+//#endif
+
+//#if MYNEWT_VAL(HAL_I2C_DOUBLE_BUFFERED)
+    /** Buffer space to hold the transmit or receive */
+    uint8_t *buffer1;
+    /** Buffer space to hold the transmit or receive */
+    uint8_t *buffer2;
+//#else
     /** Buffer space to hold the transmit or receive */
     uint8_t *buffer;
+//#endif
 };
 
 /**
@@ -237,6 +252,9 @@ int hal_i2c_master_read(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
  */
 int hal_i2c_master_probe(uint8_t i2c_num, uint8_t address,
                          uint32_t timeout);
+int
+hal_i2c_master_write_read(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
+                          uint32_t timo, uint8_t last_op);
 
 #ifdef __cplusplus
 }
