@@ -546,8 +546,9 @@ hal_i2c_handle_errors(struct nrf52_hal_i2c *i2c, int rc, os_time_t abs_timo)
     NRF_TWIM_Type *regs;
 
     regs = i2c->nhi_regs;
-
-    regs->TASKS_RESUME = 1;
+    if (regs->EVENTS_SUSPENDED) {
+        regs->TASKS_RESUME = 1;
+    }
     regs->TASKS_STOP = 1;
 
     if (regs->EVENTS_ERROR) {
@@ -629,7 +630,6 @@ hal_i2c_master_write(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
     regs->EVENTS_STOPPED = 0;
 
     /* Start an I2C transmit transaction */
-    regs->TASKS_RESUME = 1;
     regs->TASKS_STARTTX = 1;
 
     /* Enable the interrupt for the event which will end the tranaction */
@@ -715,7 +715,9 @@ hal_i2c_master_read(uint8_t i2c_num, struct hal_i2c_master_data *pdata,
     }
 
     /* Start a receive transaction */
-    regs->TASKS_RESUME = 1;
+    if (regs->EVENTS_SUSPENDED) {
+        regs->TASKS_RESUME = 1;
+    }
     regs->TASKS_STARTRX = 1;
 
     /* Enable interrupts */
@@ -791,7 +793,6 @@ hal_i2c_master_write_read(uint8_t i2c_num, struct hal_i2c_master_data *pdata, ui
     regs->EVENTS_ERROR = 0;
     regs->EVENTS_STOPPED = 0;
     regs->EVENTS_SUSPENDED = 0;
-    regs->TASKS_RESUME  = 1;
     regs->TASKS_STARTTX = 1;
 
     /* Enable interrupts for STOPPED and ERROR */
@@ -891,7 +892,9 @@ hal_i2c_irq_handler(struct nrf52_hal_i2c *i2c)
             /* Enable the STOPPED event interrupt and resume */
             regs->INTENCLR = NRF_TWIM_ALL_INTS_MASK;
             regs->INTENSET = NRF_TWIM_INT_STOPPED_MASK;
-            regs->TASKS_RESUME = 1;
+            if (regs->EVENTS_SUSPENDED) {
+                regs->TASKS_RESUME = 1;
+            }
             regs->TASKS_STOP = 1;
             return;
         }
@@ -916,8 +919,10 @@ hal_i2c_irq_handler(struct nrf52_hal_i2c *i2c)
             /* Enable STOPPED and ERROR event interrupts */
             regs->INTENCLR = NRF_TWIM_ALL_INTS_MASK;
             regs->INTENSET = NRF_TWIM_INT_STOPPED_MASK | NRF_TWIM_INT_ERROR_MASK;
+            if (regs->EVENTS_SUSPENDED) {
+                regs->TASKS_RESUME = 1;
+            }
             regs->TASKS_STARTTX = 1;
-            regs->TASKS_RESUME = 1;
 #endif
         }
     }
