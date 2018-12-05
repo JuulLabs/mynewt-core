@@ -118,9 +118,8 @@ struct nrf52_hal_i2c {
     uint32_t freq;
 #endif
 };
-//static void hal_i2c_irq_handler(NRF_TWIM_Type *regs);
-static void hal_i2c_irq_handler(struct nrf52_hal_i2c *i2c);
 
+void hal_i2c_irq_handler(struct nrf52_hal_i2c *i2c);
 
 
 #if MYNEWT_VAL(I2C_0)
@@ -860,7 +859,7 @@ static void nrf_twim_event_clear(NRF_TWIM_Type * p_reg,
 }
 #endif
 
-static void
+void
 hal_i2c_irq_handler(struct nrf52_hal_i2c *i2c)
 {
     NRF_TWIM_Type *regs;
