@@ -278,6 +278,19 @@ struct lis2dh12 {
 #endif
 };
 
+enum lis2dw12_axis_e
+{
+    LIS2DH12_AXIS_X = 0,
+    LIS2DH12_AXIS_Y,
+    LIS2DH12_AXIS_Z,
+    LIS2DH12_AXIS_MAX
+};
+
+struct lis2dh12_health_t
+{
+    uint8_t axis[LIS2DH12_AXIS_MAX];
+};
+
 /**
  * Expects to be called back through os_dev_create().
  *
@@ -650,7 +663,7 @@ lis2dh12_get_fifo_samples(struct sensor_itf *itf, uint8_t *samples);
  * @return 0 on sucess, non-zero on failure
  */
 int
-lis2dh12_run_self_test(struct sensor_itf *itf, int *result);
+lis2dh12_run_self_test(struct sensor_itf *itf, struct lis2dh12_health_t *health);
 
 #if MYNEWT_VAL(LIS2DH12_CLI)
 int lis2dh12_shell_init(void);
