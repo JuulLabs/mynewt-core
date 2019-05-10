@@ -30,7 +30,7 @@ hal_system_reset(void)
 
     while(1) {
         if (hal_debugger_connected()) {
-            asm ("ebreak");
+            __asm ("ebreak");
         }
     }
 }
