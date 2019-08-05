@@ -135,7 +135,7 @@ conf_ensure_loaded(void)
 int
 conf_set_from_storage(void)
 {
-    return conf_loading;
+    return conf_loaded;
 }
 
 static void
