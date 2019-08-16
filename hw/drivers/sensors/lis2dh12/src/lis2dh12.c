@@ -1703,6 +1703,7 @@ enable_interrupt(struct sensor *sensor, uint8_t int_to_enable, uint8_t int_num)
     struct lis2dh12_pdd *pdd;
     struct sensor_itf *itf;
     int rc;
+    os_sr_t sr; 
 
     if (!int_to_enable) {
         rc = SYS_EINVAL;
@@ -1715,7 +1716,9 @@ enable_interrupt(struct sensor *sensor, uint8_t int_to_enable, uint8_t int_num)
 
     /* if no interrupts are currently in use enable int pin */
     if (!pdd->int_enable[int_num]) {
+        OS_ENTER_CRITICAL(sr);
         hal_gpio_irq_enable(itf->si_ints[int_num].host_pin);
+        OS_EXIT_CRITICAL(sr);
     }
 
     if ((pdd->int_enable[int_num] & int_to_enable) == 0) {
@@ -2797,7 +2800,9 @@ lis2dh12_set_low_thresh(struct sensor_itf *itf,
 
         os_time_delay((OS_TICKS_PER_SEC * 20)/1000 + 1);
 
+        OS_ENTER_CRITICAL(sr);
         hal_gpio_irq_enable(itf->si_low_pin);
+        OS_EXIT_CRITICAL(sr);
 
         rc = lis2dh12_enable_int1(itf, reg);
         if (rc) {
@@ -2886,7 +2891,9 @@ lis2dh12_set_high_thresh(struct sensor_itf *itf,
             goto err;
         }
 
+        OS_ENTER_CRITICAL(sr);
         hal_gpio_irq_enable(itf->si_high_pin);
+        OS_EXIT_CRITICAL(sr);
 
         rc = lis2dh12_enable_int2(itf, reg);
         if (rc) {
