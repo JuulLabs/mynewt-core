@@ -2660,6 +2660,7 @@ lis2dh12_sensor_clear_low_thresh(struct sensor *sensor,
 {
     int rc;
     struct sensor_itf *itf;
+    os_sr_t sr; 
 
     itf = SENSOR_GET_ITF(sensor);
 
@@ -2672,8 +2673,9 @@ lis2dh12_sensor_clear_low_thresh(struct sensor *sensor,
     if (rc) {
         goto err;
     }
-
+    OS_ENTER_CRITICAL(sr);
     hal_gpio_irq_release(itf->si_low_pin);
+    OS_EXIT_CRITICAL(sr);
 
     return 0;
 err:
@@ -2695,6 +2697,7 @@ lis2dh12_sensor_clear_high_thresh(struct sensor *sensor,
 {
     int rc;
     struct sensor_itf *itf;
+    os_sr_t sr; 
 
     itf = SENSOR_GET_ITF(sensor);
 
@@ -2708,7 +2711,9 @@ lis2dh12_sensor_clear_high_thresh(struct sensor *sensor,
         goto err;
     }
 
+    OS_ENTER_CRITICAL(sr);
     hal_gpio_irq_release(itf->si_high_pin);
+    OS_EXIT_CRITICAL(sr);
 
     return 0;
 err:
@@ -2725,6 +2730,7 @@ lis2dh12_set_low_thresh(struct sensor_itf *itf,
     uint8_t reg = 0xFF;
     uint8_t int_src;
     int rc;
+    os_sr_t sr; 
 
     rc = 0;
     if (low_thresh.sad->sad_x_is_valid ||
@@ -2769,13 +2775,16 @@ lis2dh12_set_low_thresh(struct sensor_itf *itf,
 
         os_time_delay((OS_TICKS_PER_SEC * 100)/1000 + 1);
 
+        OS_ENTER_CRITICAL(sr);
         hal_gpio_irq_release(itf->si_low_pin);
 
         rc = hal_gpio_irq_init(itf->si_low_pin, lis2dh12_int_irq_handler, stt,
                                HAL_GPIO_TRIG_FALLING, HAL_GPIO_PULL_NONE);
         if (rc) {
+            OS_EXIT_CRITICAL(sr);
             goto err;
         }
+        OS_EXIT_CRITICAL(sr);
 
         reg  = low_thresh.sad->sad_x_is_valid ? LIS2DH12_INT2_CFG_XLIE : 0;
         reg |= low_thresh.sad->sad_y_is_valid ? LIS2DH12_INT2_CFG_YLIE : 0;
@@ -2797,7 +2806,9 @@ lis2dh12_set_low_thresh(struct sensor_itf *itf,
     }
 
 err:
+    OS_ENTER_CRITICAL(sr);
     hal_gpio_irq_release(itf->si_low_pin);
+    OS_EXIT_CRITICAL(sr);
     return rc;
 }
 
@@ -2811,6 +2822,7 @@ lis2dh12_set_high_thresh(struct sensor_itf *itf,
     uint8_t reg = 0;
     uint8_t int_src;
     int rc;
+    os_sr_t sr; 
 
     rc = 0;
     if (high_thresh.sad->sad_x_is_valid ||
@@ -2855,14 +2867,16 @@ lis2dh12_set_high_thresh(struct sensor_itf *itf,
 
         os_time_delay((OS_TICKS_PER_SEC * 100)/1000 + 1);
 
+        OS_ENTER_CRITICAL(sr);
         hal_gpio_irq_release(itf->si_high_pin);
 
         rc = hal_gpio_irq_init(itf->si_high_pin, lis2dh12_int_irq_handler, stt,
                                HAL_GPIO_TRIG_FALLING, HAL_GPIO_PULL_NONE);
         if (rc) {
+            OS_EXIT_CRITICAL(sr);
             goto err;
         }
-
+        OS_EXIT_CRITICAL(sr);
         reg  = high_thresh.sad->sad_x_is_valid ? LIS2DH12_INT2_CFG_XHIE : 0;
         reg |= high_thresh.sad->sad_y_is_valid ? LIS2DH12_INT2_CFG_YHIE : 0;
         reg |= high_thresh.sad->sad_z_is_valid ? LIS2DH12_INT2_CFG_ZHIE : 0;
@@ -2881,7 +2895,9 @@ lis2dh12_set_high_thresh(struct sensor_itf *itf,
     }
 
 err:
+    OS_ENTER_CRITICAL(sr);
     hal_gpio_irq_release(itf->si_high_pin);
+    OS_EXIT_CRITICAL(sr);
     return rc;
 }
 
