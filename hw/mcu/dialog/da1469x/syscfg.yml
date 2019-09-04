@@ -31,7 +31,7 @@ syscfg.defs:
         description: >
             Specifies whether or not to enable SIMO DC-DC Converter.
         value: 0
-    
+
     MCU_GPIO_RETAINABLE_NUM:
         description: >
             Number of GPIO pins which can have its state retained in
@@ -44,6 +44,19 @@ syscfg.defs:
         description: >
             Specifies settling time [us] of 32M crystal oscillator.
         value: 2000
+
+    MCU_CLOCK_RCX_SWITCH:
+        description: Enable if switching to RCX
+        value: 0
+
+    MCU_CLOCK_RCX_SETTLE_TIME_MS:
+        description: >
+          Specifies settling time [ms] of RCX.
+        value: 1000
+
+    MCU_CLOCK_XTAL32K_SWITCH:
+        description: Enable if switching to XTAL32K
+        value: 0
 
     MCU_CLOCK_XTAL32K_SETTLE_TIME_MS:
         description: >
