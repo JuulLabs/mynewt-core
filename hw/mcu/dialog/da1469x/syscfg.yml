@@ -126,6 +126,16 @@ syscfg.defs:
             data before writing, i.e. each such transfer will be split into
             chunks of this size. Buffer is created on stack.
         value: 128
+    QSPI_BURSTCMDA_INIT_VAL:
+        description: >
+            Initialization value for QSPI_BURSTCMDA_REG. The default value
+            is compatible with Macronix flash devices.
+        value: 0xa8a500eb
+    QSPI_BURSTCMDB_INIT_VAL:
+        description: >
+            Initialization value for QSPI_BURSTCMDB_REG. The default value
+            is compatible with Macronix flash devices.
+        value: 0x00000066
 
 # MCU peripherals definitions
     I2C_0:
