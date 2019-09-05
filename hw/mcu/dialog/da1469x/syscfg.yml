@@ -31,7 +31,7 @@ syscfg.defs:
         description: >
             Specifies whether or not to enable SIMO DC-DC Converter.
         value: 0
-    
+
     MCU_GPIO_RETAINABLE_NUM:
         description: >
             Number of GPIO pins which can have its state retained in
@@ -40,10 +40,31 @@ syscfg.defs:
             state of any configured GPIO has to be retained and restored.
         value: 4
 
+    MCU_LPCLK_SOURCE:
+        description: >
+            Selected low power clock source. default RC32K.
+        value:
+        choices:
+            - RCX       # ~14.5 kHz crystal oscillator
+            - XTAL32K   # 32 kHz crystal oscillator
+
     MCU_CLOCK_XTAL32M_SETTLE_TIME_US:
         description: >
             Specifies settling time [us] of 32M crystal oscillator.
-        value: 2000
+        value: 8000
+
+    MCU_CLOCK_RCX_SWITCH:
+        description: Enable if switching to RCX
+        value: 0
+
+    MCU_CLOCK_RCX_SETTLE_TIME_MS:
+        description: >
+          Specifies settling time [ms] of RCX.
+        value: 1000
+
+    MCU_CLOCK_XTAL32K_SWITCH:
+        description: Enable if switching to XTAL32K
+        value: 0
 
     MCU_CLOCK_XTAL32K_SETTLE_TIME_MS:
         description: >
@@ -326,6 +347,24 @@ syscfg.defs:
         value: 0
         restrictions:
             - '!GPADC_BATTERY'
+
+    LP_RCX:
+        description:
+        value: 0
+        restrictions:
+            - '!LP_RC32K'
+            - '!LP_XTAL32K'
+    LP_XTAL32K:
+        description:
+        value: 0
+        restrictions:
+            - '!LP_RCX'
+            - '!LP_RCX'
+
+syscfg.vals.LP_RCX:
+    MCU_LPCLK_SOURCE: RCX
+syscfg.vals.LP_XTAL32K:
+    MCU_LPCLK_SOURCE: XTAL32K
 
 syscfg.restrictions:
     - "QSPI_FLASH_ADDRESS_LENGTH==24"
