@@ -382,5 +382,15 @@ da1469x_hff_sector_info(const struct hal_flash *dev, int idx,
 static int
 da1469x_hff_init(const struct hal_flash *dev)
 {
+#if MYNEWT_VAL(RAM_RESIDENT)
+#if defined (MYNEWT_VAL_MCU_QSPIC_BURSTCMDA_INIT_VAL) && \
+    defined (MYNEWT_VAL_MCU_QSPIC_BURSTCMDB_INIT_VAL)
+    uint32_t primask;
+    __HAL_DISABLE_INTERRUPTS(primask);
+    QSPIC->QSPIC_BURSTCMDA_REG = MYNEWT_VAL(MCU_QSPIC_BURSTCMDA_INIT_VAL);
+    QSPIC->QSPIC_BURSTCMDB_REG = MYNEWT_VAL(MCU_QSPIC_BURSTCMDB_INIT_VAL);
+    __HAL_ENABLE_INTERRUPTS(primask);
+#endif
+#endif
     return 0;
 }
