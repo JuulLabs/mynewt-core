@@ -125,6 +125,7 @@ syscfg.defs:
             data before writing, i.e. each such transfer will be split into
             chunks of this size. Buffer is created on stack.
         value: 128
+
     MCU_QSPIC_APP_CFG:
         description: >
             Enable application initialization of QSPIC settings. Syscfg values that
