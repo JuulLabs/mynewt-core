@@ -153,9 +153,11 @@ void mcu_gpio_exit_sleep(void);
 #define OTPM_BASE 0x10080000UL
 #define OTPM_SIZE 0x4096
 
+/* Largest group id seen on a DA14699 was 18 so far */
+#define MCU_TRIMV_GROUP_ID_MAX          (18)
+
 #ifdef __cplusplus
 }
 #endif
 
 #endif /* __MCU_MCU_H_ */
-
