@@ -43,7 +43,10 @@ void da1469x_prail_dcdc_enable(void);
 void da1469x_prail_dcdc_restore(void);
 
 #endif
-
+#if MYNEWT_VAL(MCU_DCDC_DISABLE)
+void
+da1469x_prail_dcdc_disable(void);
+#endif
 #ifdef __cplusplus
 }
 #endif

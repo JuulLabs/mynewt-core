@@ -114,6 +114,9 @@ void SystemInit(void)
 #if MYNEWT_VAL(MCU_DCDC_ENABLE)
     da1469x_prail_dcdc_enable();
 #endif
+#if MYNEWT_VAL(MCU_DCDC_DISABLE)
+    da1469x_prail_dcdc_disable();
+#endif
 
     /* Latch all pins. We will unlatch them when initialized to do something. */
     CRG_TOP->P0_RESET_PAD_LATCH_REG = CRG_TOP_P0_PAD_LATCH_REG_P0_LATCH_EN_Msk;
