@@ -147,8 +147,15 @@ da1469x_prail_dcdc_restore(void)
      */
     if (CRG_TOP->ANA_STATUS_REG & CRG_TOP_ANA_STATUS_REG_COMP_VBAT_HIGH_Msk) {
         da1469x_retreg_restore(g_mcu_dcdc_config, ARRAY_SIZE(g_mcu_dcdc_config));
-        DCDC->DCDC_CTRL1_REG |= DCDC_DCDC_CTRL1_REG_DCDC_ENABLE_Msk;
+        DCDC->DCDC_CTRL1_REG = DCDC_DCDC_CTRL1_REG_DCDC_ENABLE_Msk;
     }
+}
+#endif
+#if MYNEWT_VAL(MCU_DCDC_DISABLE)
+void
+da1469x_prail_dcdc_disable(void)
+{
+    DCDC->DCDC_CTRL1_REG = 0 << 0;
 }
 #endif
 

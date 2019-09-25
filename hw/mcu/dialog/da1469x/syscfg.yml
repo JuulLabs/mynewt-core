@@ -32,6 +32,12 @@ syscfg.defs:
             Specifies whether or not to enable SIMO DC-DC Converter.
         value: 0
 
+    MCU_DCDC_DISABLE:
+        description: Explicitely disable DCDC Converter.
+        value: 0
+        restrictions:
+            - '!MCU_DCDC_ENABLE'
+
     MCU_GPIO_RETAINABLE_NUM:
         description: >
             Number of GPIO pins which can have its state retained in
