@@ -1029,8 +1029,3 @@ log_set_max_entry_len(struct log *log, uint16_t max_entry_len)
     assert(log);
     log->l_max_entry_len = max_entry_len;
 }
-
-// void log_summ_cb2(struct log *log, uint32_t idx)
-// {
-//     log_walk_body(log, shell_log_dump_entry, &log_offset);
-// }
