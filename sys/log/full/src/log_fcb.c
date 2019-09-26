@@ -142,10 +142,10 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
             goto err;
         }
 
-        // Notify layer above to pre-walk the damn block before erasing
-        if(log->l_summ_cb != NULL)
+        // Notify layer above to pre-walk the block before erasing
+        if(log->l_notify_erase_cb != NULL)
         {
-            log->l_summ_cb(log, 0);
+            log->l_notify_erase_cb(log);
         }
 
         if (fcb_log->fl_entries) {

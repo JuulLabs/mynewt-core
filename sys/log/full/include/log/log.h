@@ -197,7 +197,7 @@ struct log {
     void *l_arg;
     STAILQ_ENTRY(log) l_next;
     log_append_cb *l_append_cb;
-    log_summ_cb *l_summ_cb;
+    log_notification_erase_cb *l_notify_erase_cb;
     uint8_t l_level;
     uint16_t l_max_entry_len;   /* Log body length; if 0 disables check. */
 #if MYNEWT_VAL(LOG_STATS)
@@ -662,16 +662,10 @@ int log_storage_info(struct log *log, struct log_storage_info *info);
 #endif
 
 /**
- * @brief      Sets a callback to provide a user ability to notify when a fcb_rotate
- *             is about to occur. 
- *
- * @param      log   The log of interest
- * @param      cb    Log callback function
- */
+ *TODO
+*/
 void
-log_set_summary_cb(struct log *log, log_append_cb *cb);
-
-// void log_summ_cb2(struct log *log, uint32_t idx);
+log_set_notification_erase_cb(struct log *log, log_notification_erase_cb *cb);
 
 #if MYNEWT_VAL(LOG_STORAGE_WATERMARK)
 /**
