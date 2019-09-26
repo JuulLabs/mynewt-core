@@ -662,8 +662,12 @@ int log_storage_info(struct log *log, struct log_storage_info *info);
 #endif
 
 /**
- *TODO
-*/
+ * Assign a callback function to be notified once the log deletes the oldest
+ * data to write in new data.
+ *
+ * @param log   The log
+ * @param cb    The callback function to be executed.
+ */
 void
 log_set_notification_erase_cb(struct log *log, log_notification_erase_cb *cb);
 
