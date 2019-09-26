@@ -424,6 +424,12 @@ log_set_append_cb(struct log *log, log_append_cb *cb)
     log->l_append_cb = cb;
 }
 
+void
+log_set_rotate_done_cb(struct log *log, log_notify_rotate_cb *cb)
+{
+    log->l_notify_erase_done_cb = cb;
+}
+
 static int
 log_chk_type(uint8_t etype)
 {
@@ -850,6 +856,23 @@ log_walk_body(struct log *log, log_walk_body_func_t walk_body_func,
 
     log_offset->lo_arg = &lwba;
     rc = log->l_log->log_walk(log, log_walk_body_fn, log_offset);
+    log_offset->lo_arg = lwba.arg;
+
+    return rc;
+}
+
+int
+log_walk_body_section(struct log *log, log_walk_body_func_t walk_body_func,
+              struct log_offset *log_offset)
+{
+    struct log_walk_body_arg lwba = {
+        .fn = walk_body_func,
+        .arg = log_offset->lo_arg,
+    };
+    int rc;
+
+    log_offset->lo_arg = &lwba;
+    rc = log->l_log->log_walk_sector(log, log_walk_body_fn, log_offset);
     log_offset->lo_arg = lwba.arg;
 
     return rc;
