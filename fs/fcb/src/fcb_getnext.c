@@ -111,6 +111,68 @@ next_sector:
 }
 
 int
+fcb_getnext_nolock_sector(struct fcb *fcb, struct fcb_entry *loc)
+{
+    int rc;
+    int next_sect = FCB_OK;
+
+    if (loc->fe_area == NULL) {
+        /*
+         * Find the first one we have in flash.
+         */
+        loc->fe_area = fcb->f_oldest;
+    }
+    if (loc->fe_elem_off == 0) {
+        /*
+         * If offset is zero, we serve the first entry from the area.
+         */
+        loc->fe_elem_off = sizeof(struct fcb_disk_area);
+        rc = fcb_elem_info(fcb, loc);
+    } else {
+        rc = fcb_getnext_in_area(fcb, loc);
+    }
+    switch (rc) {
+    case 0:
+        return 0;
+    case FCB_ERR_CRC:
+        break;
+    default:
+        goto next_sector;
+    }
+    while (rc == FCB_ERR_CRC) {
+        rc = fcb_getnext_in_area(fcb, loc);
+        if (rc == 0) {
+            return 0;
+        }
+
+        if (rc != FCB_ERR_CRC) {
+            /*
+             * Moving to next sector.
+             */
+next_sector:
+            next_sect = FCB_ERR_NEXT_SECT;
+
+            if (loc->fe_area == fcb->f_active.fe_area) {
+                return FCB_ERR_NOVAR;
+            }
+            loc->fe_area = fcb_getnext_area(fcb, loc->fe_area);
+            loc->fe_elem_off = sizeof(struct fcb_disk_area);
+            rc = fcb_elem_info(fcb, loc);
+            switch (rc) {
+            case 0:
+                return next_sect;
+            case FCB_ERR_CRC:
+                break;
+            default:
+                goto next_sector;
+            }
+        }
+    }
+
+    return FCB_ERR_NEXT_SECT;
+}
+
+int
 fcb_getnext(struct fcb *fcb, struct fcb_entry *loc)
 {
     int rc;
@@ -120,6 +182,21 @@ fcb_getnext(struct fcb *fcb, struct fcb_entry *loc)
         return FCB_ERR_ARGS;
     }
     rc = fcb_getnext_nolock(fcb, loc);
+    os_mutex_release(&fcb->f_mtx);
+
+    return rc;
+}
+
+int
+fcb_getnext_sector(struct fcb *fcb, struct fcb_entry *loc)
+{
+    int rc;
+
+    rc = os_mutex_pend(&fcb->f_mtx, OS_WAIT_FOREVER);
+    if (rc && rc != OS_NOT_STARTED) {
+        return FCB_ERR_ARGS;
+    }
+    rc = fcb_getnext_nolock_sector(fcb, loc);
     os_mutex_release(&fcb->f_mtx);
 
     return rc;

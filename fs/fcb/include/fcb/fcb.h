@@ -66,15 +66,16 @@ struct fcb {
 /**
  * Error codes.
  */
-#define FCB_OK		0
-#define FCB_ERR_ARGS	-1
-#define FCB_ERR_FLASH	-2
-#define FCB_ERR_NOVAR   -3
-#define FCB_ERR_NOSPACE	-4
-#define FCB_ERR_NOMEM	-5
-#define FCB_ERR_CRC	-6
-#define FCB_ERR_MAGIC   -7
-#define FCB_ERR_VERSION -8
+#define FCB_OK		       0
+#define FCB_ERR_ARGS	  -1
+#define FCB_ERR_FLASH	  -2
+#define FCB_ERR_NOVAR     -3
+#define FCB_ERR_NOSPACE	  -4
+#define FCB_ERR_NOMEM	  -5
+#define FCB_ERR_CRC	      -6
+#define FCB_ERR_MAGIC     -7
+#define FCB_ERR_VERSION   -8
+#define FCB_ERR_NEXT_SECT -9
 
 int fcb_init(struct fcb *fcb);
 
@@ -138,6 +139,7 @@ int fcb_append_finish(struct fcb *, struct fcb_entry *append_loc);
 typedef int (*fcb_walk_cb)(struct fcb_entry *loc, void *arg);
 int fcb_walk(struct fcb *, struct flash_area *, fcb_walk_cb cb, void *cb_arg);
 int fcb_getnext(struct fcb *, struct fcb_entry *loc);
+int fcb_getnext_sector(struct fcb *fcb, struct fcb_entry *loc);
 
 /**
  * Erases the data from oldest sector.

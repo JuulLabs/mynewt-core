@@ -105,6 +105,7 @@ struct log_handler {
     lh_append_mbuf_func_t log_append_mbuf;
     lh_append_mbuf_body_func_t log_append_mbuf_body;
     lh_walk_func_t log_walk;
+    lh_walk_func_t log_walk_sector;
     lh_flush_func_t log_flush;
 #if MYNEWT_VAL(LOG_STORAGE_INFO)
     lh_storage_info_func_t log_storage_info;
@@ -196,14 +197,19 @@ struct log {
     void *l_arg;
     STAILQ_ENTRY(log) l_next;
     log_append_cb *l_append_cb;
+    log_summ_cb *l_summ_cb;
     uint8_t l_level;
     uint16_t l_max_entry_len;   /* Log body length; if 0 disables check. */
 #if MYNEWT_VAL(LOG_STATS)
     STATS_SECT_DECL(logs) l_stats;
 #endif
 };
-
-/* Log system level functions (for all logs.) */
+int
+shell_log_dump_entry(struct log *log, struct log_offset *log_offset,
+                     const struct log_entry_hdr *ueh, void *dptr, uint16_t len);
+/* Log system levint
+shell_log_dump_entry(struct log *log, struct log_offset *log_offset,
+                     const struct log_entry_hdr *ueh, void *dptr, uint16_t len);el functions (for all logs.) */
 void log_init(void);
 struct log *log_list_get_next(struct log *);
 
@@ -567,6 +573,10 @@ int log_walk_body(struct log *log, log_walk_body_func_t walk_body_func,
         struct log_offset *log_offset);
 int log_flush(struct log *log);
 
+
+int log_walk_body_section(struct log *log, log_walk_body_func_t walk_body_func,
+              struct log_offset *log_offset);
+
 #if MYNEWT_VAL(LOG_MODULE_LEVELS)
 /**
  * @brief Retrieves the globally configured minimum log level for the specified
@@ -650,6 +660,19 @@ void log_set_max_entry_len(struct log *log, uint16_t max_entry_len);
  */
 int log_storage_info(struct log *log, struct log_storage_info *info);
 #endif
+
+/**
+ * @brief      Sets a callback to provide a user ability to notify when a fcb_rotate
+ *             is about to occur. 
+ *
+ * @param      log   The log of interest
+ * @param      cb    Log callback function
+ */
+void
+log_set_summary_cb(struct log *log, log_append_cb *cb);
+
+// void log_summ_cb2(struct log *log, uint32_t idx);
+
 #if MYNEWT_VAL(LOG_STORAGE_WATERMARK)
 /**
  * Set watermark on log

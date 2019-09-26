@@ -31,7 +31,6 @@
 #define LOG_FCB_MAX_ALIGN   8
 
 static struct flash_area sector;
-
 static int log_fcb_rtr_erase(struct log *log, void *arg);
 
 /**
@@ -141,6 +140,12 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
 
         if (rc != FCB_ERR_NOSPACE) {
             goto err;
+        }
+
+        // Notify layer above to pre-walk the damn block before erasing
+        if(log->l_summ_cb != NULL)
+        {
+            log->l_summ_cb(log, 0);
         }
 
         if (fcb_log->fl_entries) {
@@ -512,6 +517,52 @@ log_fcb_walk(struct log *log, log_walk_func_t walk_func,
 }
 
 static int
+log_fcb_walk_sector(struct log *log, log_walk_func_t walk_func,
+             struct log_offset *log_offset)
+{
+    struct fcb *fcb;
+    struct fcb_log *fcb_log;
+    struct fcb_entry loc;
+    int rc;
+
+    fcb_log = log->l_arg;
+    fcb = &fcb_log->fl_fcb;
+
+    /* Locate the starting point of the walk. */
+    rc = log_fcb_find_gte(log, log_offset, &loc);
+    switch (rc) {
+    case 0:
+        /* Found a starting point. */
+        break;
+    case SYS_ENOENT:
+        /* No entries match the offset criteria; nothing to walk. */
+        return 0;
+    default:
+        return rc;
+    }
+
+#if MYNEWT_VAL(LOG_FCB_BOOKMARKS)
+    /* If a minimum index was specified (i.e., we are not just retrieving the
+     * last entry), add a bookmark pointing to this walk's start location.
+     */
+    if (log_offset->lo_ts >= 0) {
+        fcb_log_add_bmark(fcb_log, &loc, log_offset->lo_index);
+    }
+#endif
+
+    do {
+        rc = walk_func(log, log_offset, &loc, loc.fe_data_len);
+        if (rc != 0) {
+            return rc;
+        }
+    } while (fcb_getnext_sector(fcb, &loc) == 0);
+
+    return 0;
+}
+
+
+
+static int
 log_fcb_flush(struct log *log)
 {
     struct fcb_log *fcb_log;
@@ -834,6 +885,7 @@ const struct log_handler log_fcb_handler = {
     .log_append_mbuf = log_fcb_append_mbuf,
     .log_append_mbuf_body = log_fcb_append_mbuf_body,
     .log_walk = log_fcb_walk,
+    .log_walk_sector = log_fcb_walk_sector,
     .log_flush = log_fcb_flush,
 #if MYNEWT_VAL(LOG_STORAGE_INFO)
     .log_storage_info = log_fcb_storage_info,

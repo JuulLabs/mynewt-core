@@ -136,6 +136,7 @@ extern struct log_info g_log_info;
  * @param idx                   The index of newly appended log entry.
  */
 typedef void log_append_cb(struct log *log, uint32_t idx);
+typedef void log_summ_cb(struct log *log, uint32_t idx);
 
 #ifdef __cplusplus
 }
