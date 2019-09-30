@@ -99,8 +99,8 @@ da1469x_sleep(os_time_t ticks)
 void
 da1469x_sleep(os_time_t ticks)
 {
-    __DSB();
-    __WFI();
+//    __DSB();
+//    __WFI();
 }
 
 #endif
