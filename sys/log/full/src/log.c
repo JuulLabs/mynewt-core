@@ -425,15 +425,15 @@ log_set_append_cb(struct log *log, log_append_cb *cb)
 }
 
 void
-log_set_notification_erase_cb(struct log *log, log_notification_erase_cb *cb)
+log_set_rotate_cb(struct log *log, log_notify_rotate *cb)
 {
     log->l_notify_erase_cb = cb;
 }
 
 void
-log_set_notification_erase_complete_cb(struct log *log, log_notification_erase_cb *cb)
+log_set_rotate_done_cb(struct log *log, log_notify_rotate *cb)
 {
-    log->l_notify_erase_complete_cb = cb;
+    log->l_notify_erase_done_cb = cb;
 }
 
 static int

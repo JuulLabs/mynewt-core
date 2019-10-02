@@ -140,7 +140,7 @@ typedef void log_append_cb(struct log *log, uint32_t idx);
 /**
  * TODO
  */
-typedef void log_notification_erase_cb(struct log *log);
+typedef void log_notify_rotate(struct log *log);
 
 #ifdef __cplusplus
 }

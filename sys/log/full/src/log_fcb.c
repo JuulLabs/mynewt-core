@@ -176,8 +176,8 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
         }
 
         /* Inform that a fcb_rotate has been completed */
-        if (log->l_notify_erase_complete_cb != NULL) {
-            log->l_notify_erase_complete_cb(log);
+        if (log->l_notify_erase_done_cb != NULL) {
+            log->l_notify_erase_done_cb(log);
         }
 
 #if MYNEWT_VAL(LOG_STORAGE_WATERMARK)
