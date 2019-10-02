@@ -142,9 +142,8 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
             goto err;
         }
 
-        // Notify layer above to pre-walk the block before erasing
-        if(log->l_notify_erase_cb != NULL)
-        {
+        /* Notify layer above to pre-walk the block before erasing */
+        if (log->l_notify_erase_cb != NULL) {
             log->l_notify_erase_cb(log);
         }
 
@@ -174,6 +173,11 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
         rc = fcb_rotate(fcb);
         if (rc) {
             goto err;
+        }
+
+        /* Inform that a fcb_rotate has been completed */
+        if (log->l_notify_erase_complete_cb != NULL) {
+            log->l_notify_erase_complete_cb(log);
         }
 
 #if MYNEWT_VAL(LOG_STORAGE_WATERMARK)
@@ -438,7 +442,7 @@ log_fcb_read_mbuf(struct log *log, void *dptr, struct os_mbuf *om,
                   uint16_t offset, uint16_t len)
 {
     struct fcb_entry *loc;
-    uint8_t data[128];
+    uint8_t data[256];
     uint16_t read_len;
     uint16_t rem_len;
     int rc;
@@ -877,23 +881,23 @@ err:
 }
 
 const struct log_handler log_fcb_handler = {
-    .log_type = LOG_TYPE_STORAGE,
-    .log_read = log_fcb_read,
-    .log_read_mbuf = log_fcb_read_mbuf,
-    .log_append = log_fcb_append,
-    .log_append_body = log_fcb_append_body,
-    .log_append_mbuf = log_fcb_append_mbuf,
+    .log_type             = LOG_TYPE_STORAGE,
+    .log_read             = log_fcb_read,
+    .log_read_mbuf        = log_fcb_read_mbuf,
+    .log_append           = log_fcb_append,
+    .log_append_body      = log_fcb_append_body,
+    .log_append_mbuf      = log_fcb_append_mbuf,
     .log_append_mbuf_body = log_fcb_append_mbuf_body,
-    .log_walk = log_fcb_walk,
-    .log_walk_sector = log_fcb_walk_sector,
-    .log_flush = log_fcb_flush,
+    .log_walk             = log_fcb_walk,
+    .log_walk_sector      = log_fcb_walk_sector,
+    .log_flush            = log_fcb_flush,
 #if MYNEWT_VAL(LOG_STORAGE_INFO)
-    .log_storage_info = log_fcb_storage_info,
+    .log_storage_info     = log_fcb_storage_info,
 #endif
 #if MYNEWT_VAL(LOG_STORAGE_WATERMARK)
-    .log_set_watermark = log_fcb_set_watermark,
+    .log_set_watermark    = log_fcb_set_watermark,
 #endif
-    .log_registered = log_fcb_registered,
+    .log_registered       = log_fcb_registered,
 };
 
 #endif

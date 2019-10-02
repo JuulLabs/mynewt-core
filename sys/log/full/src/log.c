@@ -430,6 +430,12 @@ log_set_notification_erase_cb(struct log *log, log_notification_erase_cb *cb)
     log->l_notify_erase_cb = cb;
 }
 
+void
+log_set_notification_erase_complete_cb(struct log *log, log_notification_erase_cb *cb)
+{
+    log->l_notify_erase_complete_cb = cb;
+}
+
 static int
 log_chk_type(uint8_t etype)
 {
