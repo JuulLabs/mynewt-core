@@ -197,8 +197,8 @@ struct log {
     void *l_arg;
     STAILQ_ENTRY(log) l_next;
     log_append_cb *l_append_cb;
-    log_notify_rotate *l_notify_erase_cb;
-    log_notify_rotate *l_notify_erase_done_cb;
+    log_notify_rotate_cb *l_notify_erase_cb;
+    log_notify_rotate_cb *l_notify_erase_done_cb;
     uint8_t l_level;
     uint16_t l_max_entry_len;   /* Log body length; if 0 disables check. */
 #if MYNEWT_VAL(LOG_STATS)
@@ -670,7 +670,7 @@ int log_storage_info(struct log *log, struct log_storage_info *info);
  * @param cb    The callback function to be executed.
  */
 void
-log_set_rotate_cb(struct log *log, log_notify_rotate *cb);
+log_set_rotate_cb(struct log *log, log_notify_rotate_cb *cb);
 
 /**
  * Assign a callback function to be notified once the log deletes the oldest
@@ -680,7 +680,7 @@ log_set_rotate_cb(struct log *log, log_notify_rotate *cb);
  * @param cb    The callback function to be executed.
  */
 void
-log_set_rotate_done_cb(struct log *log, log_notify_rotate *cb);
+log_set_rotate_done_cb(struct log *log, log_notify_rotate_cb *cb);
 
 #if MYNEWT_VAL(LOG_STORAGE_WATERMARK)
 /**
