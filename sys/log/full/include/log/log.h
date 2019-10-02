@@ -205,12 +205,11 @@ struct log {
     STATS_SECT_DECL(logs) l_stats;
 #endif
 };
+
+/* TODO: REMOVE WHEN DONE */
 int
 shell_log_dump_entry(struct log *log, struct log_offset *log_offset,
                      const struct log_entry_hdr *ueh, void *dptr, uint16_t len);
-/* Log system levint
-shell_log_dump_entry(struct log *log, struct log_offset *log_offset,
-                     const struct log_entry_hdr *ueh, void *dptr, uint16_t len);el functions (for all logs.) */
 void log_init(void);
 struct log *log_list_get_next(struct log *);
 

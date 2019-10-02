@@ -146,7 +146,7 @@ log_shell_cbor_reader_init(struct log_shell_cbor_reader *cbr, struct log *log,
     cbr->dptr = dptr;
 }
 #endif
-
+/*TODO: Change back to static when done */
 int
 shell_log_dump_entry(struct log *log, struct log_offset *log_offset,
                      const struct log_entry_hdr *ueh, void *dptr, uint16_t len)

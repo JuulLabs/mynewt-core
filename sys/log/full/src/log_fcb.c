@@ -31,6 +31,7 @@
 #define LOG_FCB_MAX_ALIGN   8
 
 static struct flash_area sector;
+
 static int log_fcb_rtr_erase(struct log *log, void *arg);
 
 /**
@@ -442,7 +443,7 @@ log_fcb_read_mbuf(struct log *log, void *dptr, struct os_mbuf *om,
                   uint16_t offset, uint16_t len)
 {
     struct fcb_entry *loc;
-    uint8_t data[256];
+    uint8_t data[128];
     uint16_t read_len;
     uint16_t rem_len;
     int rc;

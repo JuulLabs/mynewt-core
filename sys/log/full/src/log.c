@@ -884,7 +884,6 @@ log_walk_body_section(struct log *log, log_walk_body_func_t walk_body_func,
     return rc;
 }
 
-
 /**
  * Reads from the specified log.
  *
