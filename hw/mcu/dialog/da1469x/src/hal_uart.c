@@ -404,7 +404,7 @@ hal_uart_init(int port, void *arg)
     uart->irqn = irqn;
 
     mcu_gpio_set_pin_function(cfg->pin_tx, MCU_GPIO_MODE_OUTPUT, gpiofunc[0]);
-    mcu_gpio_set_pin_function(cfg->pin_rx, MCU_GPIO_MODE_INPUT, gpiofunc[1]);
+    mcu_gpio_set_pin_function(cfg->pin_rx, MCU_GPIO_MODE_INPUT_PULLUP, gpiofunc[1]);
     if (cfg->pin_rts >= 0) {
         mcu_gpio_set_pin_function(cfg->pin_rts, MCU_GPIO_MODE_OUTPUT, gpiofunc[2]);
     }
