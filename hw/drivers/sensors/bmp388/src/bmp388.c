@@ -194,7 +194,10 @@ static void
 delay_msec(uint32_t delay)
 {
     delay = (delay * OS_TICKS_PER_SEC) / 1000 + 1;
-    os_time_delay(delay);
+    if (delay == 0)
+    {
+        os_time_delay(delay);   // CH 19-1011 -- this driver needs some love, killing this delay for now cuz it's chuggin up everything
+    }
 }
 
 #if !MYNEWT_VAL(BUS_DRIVER_PRESENT)
