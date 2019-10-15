@@ -162,8 +162,8 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
 #endif
 
         /* Check to see if the active region is in the scratch region */
-        if (log->l_notify_erase_done_cb != NULL) {
-            log->l_notify_erase_done_cb(log);
+        if (log->l_rotate_notify_cb != NULL) {
+            log->l_rotate_notify_cb(log);
         }
 
 #if MYNEWT_VAL(LOG_FCB_BOOKMARKS)
