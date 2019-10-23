@@ -158,11 +158,9 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
             LOG_STATS_INCN(log, lost, cnt);
         }
 #endif
-
         /* Notify upper layer that a rotation is about to occur */
         if (log->l_rotate_notify_cb != NULL) {
             fcb_append_to_scratch(fcb);
-            log->l_rotate_notify_cb(log);
         }
 
 #if MYNEWT_VAL(LOG_FCB_BOOKMARKS)
@@ -176,6 +174,14 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
         }
 
 #if MYNEWT_VAL(LOG_STORAGE_WATERMARK)
+
+        /* Check to see if watermark is set. If it isn't, assume no logs have
+         * been read.
+         */
+        if(fcb_log->fl_watermark_off == -1) {
+            log->l_rotate_notify_cb(log);
+        }
+
         /*
          * FCB was rotated successfully so let's check if watermark was within
          * oldest flash area which was erased. If yes, then move watermark to
@@ -183,6 +189,10 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
          */
         if ((fcb_log->fl_watermark_off >= old_fa->fa_off) &&
             (fcb_log->fl_watermark_off < old_fa->fa_off + old_fa->fa_size)) {
+            /* Read logs if the wataermark is at the oldest sector.*/
+            if (log->l_rotate_notify_cb != NULL) {
+                log->l_rotate_notify_cb(log);
+            }
             fcb_log->fl_watermark_off = fcb->f_oldest->fa_off;
         }
 #endif
@@ -679,7 +689,6 @@ log_fcb_storage_info(struct log *log, struct log_storage_info *info)
     return 0;
 }
 #endif
-
 #if MYNEWT_VAL(LOG_STORAGE_WATERMARK)
 static int
 log_fcb_new_watermark_index(struct log *log, struct log_offset *log_offset,
@@ -694,7 +703,6 @@ log_fcb_new_watermark_index(struct log *log, struct log_offset *log_offset,
     fl = (struct fcb_log *)log->l_arg;
 
     rc = log_fcb_read(log, loc, &ueh, 0, sizeof(ueh));
-
     if (rc != sizeof(ueh)) {
         return -1;
     }
