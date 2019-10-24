@@ -68,6 +68,7 @@ struct fcb_log {
 #if MYNEWT_VAL(LOG_STORAGE_WATERMARK)
     /* Internal - tracking storage use */
     uint32_t fl_watermark_off;
+    uint32_t last_read_index;
 #endif
 #if MYNEWT_VAL(LOG_FCB_BOOKMARKS)
     struct log_fcb_bset fl_bset;

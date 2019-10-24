@@ -179,7 +179,7 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
          * been read.
          */
         if(fcb_log->fl_watermark_off == -1) {
-            log->l_rotate_notify_cb(log);
+            log->l_rotate_notify_cb(log, 0);
         }
 
         /*
@@ -191,7 +191,7 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
             (fcb_log->fl_watermark_off < old_fa->fa_off + old_fa->fa_size)) {
             /* Read logs if the wataermark is at the oldest sector.*/
             if (log->l_rotate_notify_cb != NULL) {
-                log->l_rotate_notify_cb(log);
+                log->l_rotate_notify_cb(log, fcb_log->last_read_index);
             }
             fcb_log->fl_watermark_off = fcb->f_oldest->fa_off;
         }
@@ -201,7 +201,6 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
 err:
     return (rc);
 }
-
 /**
  * Calculates the number of message body bytes that should be included after
  * the entry header in the first write.  Inclusion of body bytes is necessary
@@ -710,6 +709,7 @@ log_fcb_new_watermark_index(struct log *log, struct log_offset *log_offset,
     if (ueh.ue_index >= log_offset->lo_index) {
         fl->fl_watermark_off = loc->fe_area->fa_off + loc->fe_data_off +
                                loc->fe_data_len;
+        fl->last_read_index = ueh.ue_index;
         return 1;
     } else {
         return 0;
