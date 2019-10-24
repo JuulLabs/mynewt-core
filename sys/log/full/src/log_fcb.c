@@ -158,7 +158,7 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
             LOG_STATS_INCN(log, lost, cnt);
         }
 #endif
-        /* Notify upper layer that a rotation is about to occur */
+        /* Append to scratch sector */
         if (log->l_rotate_notify_cb != NULL) {
             fcb_append_to_scratch(fcb);
         }
