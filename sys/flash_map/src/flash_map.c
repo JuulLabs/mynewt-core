@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
+#include "console/console.h"
 #include <inttypes.h>
 #include <string.h>
 #include <assert.h>
@@ -217,6 +217,8 @@ flash_area_read(const struct flash_area *fa, uint32_t off, void *dst,
     uint32_t len)
 {
     if (off > fa->fa_size || off + len > fa->fa_size) {
+        // console_printf("off > fa->fa_size || off + len > fa->fa_size\n");
+        console_printf("Off %ld\nlen %ld\nfa-fa_size%ld -1\n\n", off, len, fa->fa_size);
         return -1;
     }
     return hal_flash_read(fa->fa_device_id, fa->fa_off + off, dst, len);

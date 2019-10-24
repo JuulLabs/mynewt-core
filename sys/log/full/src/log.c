@@ -37,6 +37,8 @@
 #include "shell/shell.h"
 #endif
 
+#include "console/console.h"
+
 struct log_module_entry {
     int16_t id;
     const char *name;
@@ -1006,9 +1008,11 @@ log_read_mbuf(struct log *log, const void *dptr, struct os_mbuf *om, uint16_t of
     int rc;
 
     if (!om || !log->l_log->log_read_mbuf) {
+        console_printf("returning 0 from log_read_mbuf\n");
         return 0;
     }
 
+    console_printf("LEN %d\n", len);
     rc = log->l_log->log_read_mbuf(log, dptr, om, off, len);
 
     return (rc);
