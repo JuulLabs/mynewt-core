@@ -138,7 +138,6 @@ typedef void log_append_cb(struct log *log, uint32_t idx);
  * @brief Callback that is executed each time we are about to rotate a log.
  * 
  * @param log                   The log that is about to rotate 
- * @param index                 The index of the next log to be read
  */
 typedef void log_notify_rotate_cb(const struct log *log);
 

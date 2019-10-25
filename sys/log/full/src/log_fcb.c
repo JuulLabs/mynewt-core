@@ -162,6 +162,8 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
              (fcb_log->fl_watermark_off < old_fa->fa_off + old_fa->fa_size)) || (fcb_log->fl_watermark_off == -1)) {
             if (log->l_rotate_notify_cb != NULL) {
                 fcb_append_to_scratch(fcb);
+                log->l_rotate_notify_cb(log);
+                // fcb_log->watermark_idx = 0;
             }
         }
 
@@ -181,7 +183,7 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
          * been read.
          */
         if(fcb_log->fl_watermark_off == -1) {
-            log->l_rotate_notify_cb(log, 0);
+            log->l_rotate_notify_cb(log);
         }
 
         /*
@@ -192,10 +194,6 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
         if ((fcb_log->fl_watermark_off >= old_fa->fa_off) &&
             (fcb_log->fl_watermark_off < old_fa->fa_off + old_fa->fa_size)) {
             /* Read logs if the wataermark is at the oldest sector.*/
-            if (log->l_rotate_notify_cb != NULL) {
-                log->l_rotate_notify_cb(log, fcb_log->last_read_index);
-                fcb_log->last_read_index = 0;
-            }
             fcb_log->fl_watermark_off = fcb->f_oldest->fa_off;
         }
 #endif
@@ -713,7 +711,7 @@ log_fcb_new_watermark_index(struct log *log, struct log_offset *log_offset,
     if (ueh.ue_index >= log_offset->lo_index) {
         fl->fl_watermark_off = loc->fe_area->fa_off + loc->fe_data_off +
                                loc->fe_data_len;
-        fl->last_read_index = loc->fe_data_off;
+        fl->watermark_idx = ueh.ue_index;
         return 1;
     } else {
         return 0;
@@ -736,7 +734,6 @@ log_fcb_set_watermark(struct log *log, uint32_t index)
     log_offset.lo_index = index;
     log_offset.lo_data_len = 0;
 
-    console_printf("log_fcb_set_watermark() Index: %ld",index);
     /* Find where to start the walk, and set watermark accordingly */
     rc = log_fcb_walk(log, log_fcb_new_watermark_index, &log_offset);
     if (rc != 0) {
@@ -746,7 +743,7 @@ log_fcb_set_watermark(struct log *log, uint32_t index)
     /* If there are no entries to read and the watermark has not been set */
     if (fl->fl_watermark_off == 0xffffffff) {
         fl->fl_watermark_off = fcb->f_oldest->fa_off;
-        fl->last_read_index = 0;
+        fl->watermark_idx = 0;
     }
 
     return (0);
