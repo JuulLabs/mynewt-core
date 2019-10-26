@@ -158,13 +158,9 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
         }
 #endif
         /* Append to scratch sector */
-        if (((fcb_log->fl_watermark_off >= old_fa->fa_off) &&
-             (fcb_log->fl_watermark_off < old_fa->fa_off + old_fa->fa_size)) || (fcb_log->fl_watermark_off == -1)) {
-            if (log->l_rotate_notify_cb != NULL) {
-                fcb_append_to_scratch(fcb);
-                log->l_rotate_notify_cb(log);
-                // fcb_log->watermark_idx = 0;
-            }
+        if (log->l_rotate_notify_cb != NULL) {
+            fcb_append_to_scratch(fcb);
+            log->l_rotate_notify_cb(log);
         }
 
 #if MYNEWT_VAL(LOG_FCB_BOOKMARKS)
@@ -178,14 +174,6 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
         }
 
 #if MYNEWT_VAL(LOG_STORAGE_WATERMARK)
-
-        /* Check to see if watermark is set. If it isn't, assume no logs have
-         * been read.
-         */
-        if(fcb_log->fl_watermark_off == -1) {
-            log->l_rotate_notify_cb(log);
-        }
-
         /*
          * FCB was rotated successfully so let's check if watermark was within
          * oldest flash area which was erased. If yes, then move watermark to
