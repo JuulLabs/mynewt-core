@@ -160,7 +160,7 @@ log_fcb_start_append(struct log *log, int len, struct fcb_entry *loc)
         /* Append to scratch sector */
         if (log->l_rotate_notify_cb != NULL) {
             fcb_append_to_scratch(fcb);
-            log->l_rotate_notify_cb(log);
+            log->l_rotate_notify_cb(log, fcb_log->watermark_idx);
         }
 
 #if MYNEWT_VAL(LOG_FCB_BOOKMARKS)
