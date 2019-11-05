@@ -89,6 +89,7 @@ typedef void (*hal_gpio_irq_handler_t)(void *arg);
  * @return int  0: no error; -1 otherwise.
  */
 int hal_gpio_init_in(int pin, hal_gpio_pull_t pull);
+int hal_gpio_init_in_fast(int pin, hal_gpio_pull_t pull);
 
 /**
  * Initialize the specified pin as an output, setting the pin to the specified
@@ -100,6 +101,7 @@ int hal_gpio_init_in(int pin, hal_gpio_pull_t pull);
  * @return int  0: no error; -1 otherwise.
  */
 int hal_gpio_init_out(int pin, int val);
+int hal_gpio_init_out_fast(int pin, int val);
 
 /**
  * Deinitialize the specified pin to revert the previous initialization

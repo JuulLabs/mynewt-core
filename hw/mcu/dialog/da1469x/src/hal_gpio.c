@@ -223,6 +223,40 @@ hal_gpio_init_in(int pin, hal_gpio_pull_t pull)
 }
 
 int
+hal_gpio_init_in_fast(int pin, hal_gpio_pull_t pull)
+{
+    volatile uint32_t *px_xx_mod_reg = GPIO_PIN_MODE_REG_ADDR(pin);
+    uint32_t regval;
+    // uint32_t primask;
+
+    switch (pull) {
+    case HAL_GPIO_PULL_UP:
+        regval = MCU_GPIO_FUNC_GPIO | MCU_GPIO_MODE_INPUT_PULLUP;
+        break;
+    case HAL_GPIO_PULL_DOWN:
+        regval = MCU_GPIO_FUNC_GPIO | MCU_GPIO_MODE_INPUT_PULLDOWN;
+        break;
+    case HAL_GPIO_PULL_NONE:
+        regval = MCU_GPIO_FUNC_GPIO | MCU_GPIO_MODE_INPUT;
+        break;
+    default:
+        return -1;
+    }
+
+    // __HAL_DISABLE_INTERRUPTS(primask);
+
+    // mcu_gpio_unlatch_prepare(pin);
+
+    *px_xx_mod_reg = regval;
+
+    // mcu_gpio_unlatch(pin);
+
+    // __HAL_ENABLE_INTERRUPTS(primask);
+
+    return 0;
+}
+
+int
 hal_gpio_init_out(int pin, int val)
 {
     uint32_t primask;
@@ -242,6 +276,30 @@ hal_gpio_init_out(int pin, int val)
     mcu_gpio_unlatch(pin);
 
     __HAL_ENABLE_INTERRUPTS(primask);
+
+    return 0;
+}
+
+int
+hal_gpio_init_out_fast(int pin, int val)
+{
+    // uint32_t primask;
+
+    // __HAL_DISABLE_INTERRUPTS(primask);
+
+    // mcu_gpio_unlatch_prepare(pin);
+    
+    if (val) {
+        GPIO_PIN_SET_DATA_REG(pin) = GPIO_PIN_BIT(pin);
+    } else {
+        GPIO_PIN_RESET_DATA_REG(pin) = GPIO_PIN_BIT(pin);
+    }
+
+    GPIO_PIN_MODE_REG(pin) = MCU_GPIO_MODE_OUTPUT;
+
+    // mcu_gpio_unlatch(pin);
+
+    // __HAL_ENABLE_INTERRUPTS(primask);
 
     return 0;
 }
