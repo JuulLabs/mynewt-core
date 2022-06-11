@@ -1009,6 +1009,7 @@ lps33thw_init(struct os_dev *dev, void *arg)
         }
     }
 #endif
+    lps33thw_set_value(&sensor->s_itf, LPS33THW_CTRL_REG1_ODR, LPS33THW_ONE_SHOT);
 
     return rc;
 }

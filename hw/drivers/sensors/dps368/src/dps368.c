@@ -774,6 +774,8 @@ int dps368_init(struct os_dev *dev, void *arg)
 
     dps368_stats_int(dev);
 
+    dps368_set_mode(dps368, DPS3xx_MODE_IDLE);
+
     rc = sensor_init(sensor, dev);
 
     if (rc) {
