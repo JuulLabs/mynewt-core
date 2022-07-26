@@ -34,7 +34,7 @@ union da1469x_qspi_data_reg {
     uint8_t d8;
 };
 
-static const struct qspi_flash_config *rdid_detected = NULL;
+const struct qspi_flash_config *rdid_detected = NULL;
 
 static int da1469x_hff_read(const struct hal_flash *dev, uint32_t address,
                             void *dst, uint32_t num_bytes);
@@ -461,7 +461,6 @@ qspi_read_rdid(const struct hal_flash *dev)
 static sec_text_ram_core void
 da1469x_hff_mcu_custom_init(const struct hal_flash *dev)
 {
-    const struct qspi_flash_config *config = NULL;
     uint32_t primask;
 
     __HAL_DISABLE_INTERRUPTS(primask);
