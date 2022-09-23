@@ -460,14 +460,13 @@ syscfg.defs:
         restrictions:
             - '!GPADC_BATTERY'
 
-    MCU_WATCHDOG_DISABLE_ON_INIT:
-        description: >
-          'Disable watchdog on init'
-        value: 1
-
     DA1469X_LPCLK_SYSINIT_STAGE:
         description: >
           'Initalization stage for DA1469X'
+
+    WATCHDOG_DISABLE_ON_INIT:
+        description: >
+          'Enable watchdog on init'
         value: 1
 
 syscfg.vals:
