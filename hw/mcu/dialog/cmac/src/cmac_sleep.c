@@ -169,7 +169,7 @@ cmac_sleep_wait4xtal(void)
 
 #define T_USEC(_t)          (_t)
 #define T_LPTICK(_t)        ((_t) * cmac_timer_slp_tick_us())
-#define T_LPTICK_U(_t)      (T_LPTICK(_t) * 15 / 10)
+#define T_LPTICK_U(_t)      (T_LPTICK(_t) * 2)
 
 static void
 cmac_sleep_calculate_wakeup_time(void)
