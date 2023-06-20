@@ -204,6 +204,11 @@ compensate_1mhz_clock(uint64_t slept_ns)
                             (comp_2mhz << CMAC_CM_CLK_COMP_REG_CLK2MHZ_COMP_Pos);
 }
 
+volatile uint32_t g_ll_timer_09_before_comp;
+volatile uint32_t g_ll_timer_36_before_comp;
+volatile uint32_t g_ll_timer_09_after_comp;
+volatile uint32_t g_ll_timer_36_after_comp;
+
 static void
 compensate_ll_timer(uint32_t slept_us)
 {
@@ -254,6 +259,10 @@ compensate_ll_timer(uint32_t slept_us)
     new_ll_timer_09 = CMAC->CM_LL_TIMER1_9_0_REG;
     __WFE();
 
+    // debug
+    g_ll_timer_36_before_comp = new_ll_timer_36;
+    g_ll_timer_09_before_comp = new_ll_timer_09;
+
     /* 2nd tick - calculate new LL Timer value */
     new_ll_timer_09 += comp_ll_timer_09;
     new_ll_timer_36 += comp_ll_timer_36 + new_ll_timer_09 / 1024;
@@ -263,6 +272,10 @@ compensate_ll_timer(uint32_t slept_us)
     /* 3rd tick - write compensated value */
     CMAC->CM_LL_TIMER1_9_0_REG = new_ll_timer_09;
     CMAC->CM_LL_TIMER1_36_10_REG = new_ll_timer_36;
+
+    // debug
+    g_ll_timer_36_after_comp = new_ll_timer_36;
+    g_ll_timer_09_after_comp = new_ll_timer_09;
 
 #ifndef NDEBUG
     __WFE();
@@ -312,6 +325,11 @@ cmac_timer_slp_enable(uint32_t ticks)
     switch_to_slp();
 }
 
+volatile uint32_t g_cm_ll_int_stat_reg;
+volatile uint32_t g_timer_dbg_ts[4];
+volatile uint32_t g_at_assert_eq_x;
+volatile uint32_t g_at_assert_eq_y;
+
 void
 cmac_timer_slp_disable(uint32_t exp_ticks)
 {
@@ -319,9 +337,15 @@ cmac_timer_slp_disable(uint32_t exp_ticks)
     uint32_t slept_us;
     uint64_t slept_ns;
 
+
+    g_cm_ll_int_stat_reg = CMAC->CM_LL_INT_STAT_REG;
     assert(CMAC->CM_LL_INT_STAT_REG == 0);
 
+    g_timer_dbg_ts[0] = cmac_timer_read32(); // debug ts
+
     switch_to_llt();
+
+    g_timer_dbg_ts[1] = cmac_timer_read32(); // debug ts
 
     slept_ticks = exp_ticks - slp_read();
 
@@ -335,13 +359,28 @@ cmac_timer_slp_disable(uint32_t exp_ticks)
 
     __disable_irq();
     compensate_1mhz_clock(slept_ns);
+
+    g_timer_dbg_ts[2] = cmac_timer_read32();
+
     compensate_ll_timer(slept_us);
+
+    g_timer_dbg_ts[3] = cmac_timer_read32(); // debug ts
+
+    // debug: capature timer comparator settings..
+    g_at_assert_eq_x = (CMAC->CM_LL_TIMER1_EQ_X_HI_REG << 10) |
+                        CMAC->CM_LL_TIMER1_EQ_X_LO_REG;
+    g_at_assert_eq_y = (CMAC->CM_LL_TIMER1_EQ_Y_HI_REG << 10) |
+                        CMAC->CM_LL_TIMER1_EQ_Y_LO_REG;
+
+    // debug
+    g_cm_ll_int_stat_reg = CMAC->CM_LL_INT_STAT_REG;
+
     __enable_irq();
 
     CMAC_TIMER_SLP->CM_SLP_TIMER_REG = 0;
     CMAC_TIMER_SLP->CM_SLP_CTRL2_REG = CMAC_TIMER_SLP_CM_SLP_CTRL2_REG_SLP_TIMER_IRQ_CLR_Msk;
 
-    assert(CMAC->CM_LL_INT_STAT_REG == 0);
+    assert(g_cm_ll_int_stat_reg == 0);
 }
 
 bool
@@ -406,6 +445,14 @@ cmac_timer_int_os_tick_clear(void)
     CMAC->CM_LL_INT_STAT_REG = CMAC_CM_LL_INT_STAT_REG_LL_TIMER1_9_0_EQ_Y_SEL_Msk;
 }
 
+volatile uint32_t g_last_val32;
+volatile uint32_t g_last_next_at_mask;
+volatile uint32_t g_last_to_next_eq_x;
+volatile uint32_t g_last_to_next_eq_y;
+
+volatile uint32_t g_timer1_eq_x_at_to_next;
+volatile uint32_t g_timer1_eq_y_at_to_next;
+
 uint32_t
 cmac_timer_next_at(void)
 {
@@ -416,6 +463,8 @@ cmac_timer_next_at(void)
 
     mask = CMAC->CM_LL_INT_MSK_SET_REG;
 
+    g_last_next_at_mask = mask;
+
 #if MYNEWT_VAL(MCU_SLP_TIMER_32K_ONLY)
     /* Max sleep time is 130s (see below) */
     to_next = 130000000;
@@ -425,10 +474,19 @@ cmac_timer_next_at(void)
 
     val32 = cmac_timer_read32();
 
+    // debug
+    g_last_val32 = val32;
+
     if (mask & CMAC_CM_LL_INT_MSK_SET_REG_LL_TIMER1_EQ_X_SEL_Msk) {
         reg32 = (CMAC->CM_LL_TIMER1_EQ_X_HI_REG << 10) |
                 CMAC->CM_LL_TIMER1_EQ_X_LO_REG;
+
         to_next = min(to_next, reg32 - val32);
+        g_last_to_next_eq_x = to_next;
+
+        g_timer1_eq_x_at_to_next = reg32;
+    } else {
+        g_last_to_next_eq_x = 0;
     }
 
     if (mask & (CMAC_CM_LL_INT_MSK_SET_REG_LL_TIMER1_36_10_EQ_Y_SEL_Msk |
@@ -436,6 +494,11 @@ cmac_timer_next_at(void)
         reg32 = (CMAC->CM_LL_TIMER1_36_10_EQ_Y_REG << 10) |
                 CMAC->CM_LL_TIMER1_9_0_EQ_Y_REG;
         to_next = min(to_next, reg32 - val32);
+        g_last_to_next_eq_y = to_next;
+
+        g_timer1_eq_y_at_to_next = reg32;
+    } else {
+        g_last_to_next_eq_y = 0;
     }
 
     /* XXX add handling if any other comparator is used */
