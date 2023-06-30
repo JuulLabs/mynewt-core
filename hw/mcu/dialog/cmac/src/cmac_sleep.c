@@ -156,15 +156,34 @@ cmac_sleep_enable_dcdc(void)
     *(volatile uint32_t *)0x50000304 = g_cmac_shared_data.dcdc.ctrl1;
 }
 
+// debug
+volatile uint32_t g_last_wait4xtal_cycles;
+volatile uint32_t g_last_clk_ctrl_reg;
+volatile uint32_t g_waited_for_xtal_count;
+volatile uint32_t g_last_xtalrdy_ctrl_reg;
+volatile uint32_t g_last_xtalrdy_stat_reg;
+
 static void
 cmac_sleep_wait4xtal(void)
 {
+    // use to look at bits 15:12 - which clock was running when we
+    // got here?
+    g_last_clk_ctrl_reg = *(volatile uint32_t *) 0x50000014;
+    g_last_xtalrdy_ctrl_reg = *(volatile uint32_t *) 0x50010018;
+    g_last_xtalrdy_stat_reg = *(volatile uint32_t *) 0x5001001c;
+        
+
     if (*(volatile uint32_t *)0x50000014 & 0x4000) {
         return;
     }
 
-    while (*(volatile uint32_t *)0x5001001c & 0x0000ff00);
+    while (*(volatile uint32_t *)0x5001001c & 0x0000ff00)
+        g_last_wait4xtal_cycles++;
     *(volatile uint32_t *)0x5000001c = 1;
+
+    if (g_last_wait4xtal_cycles > 0) {
+        g_waited_for_xtal_count++;
+    }
 }
 
 #define T_USEC(_t)          (_t)
@@ -196,6 +215,18 @@ cmac_sleep_calculate_wakeup_time(void)
          */
         T_LPTICK_U(2) + T_LPTICK_U(2) +
         max(T_LPTICK_U(3), T_USEC(g_cmac_shared_data.xtal32m_settle_us)) +
+
+        // 6/18 6:43am
+        // Adding 2000us here appears to work. ensures cmac wakes early enough to handle longer switch
+        // to xtal32m. 
+        // commenting out to work with catching the bug again..
+#if 0 
+        // crash happens when waiting for xtal32m to be ready takes upto ~2376us but settle time is 
+        // only 400us.
+        // here, adding the difference: 2376us - 400us -> add another 2000us
+        + T_USEC(2000) + 
+#endif
+
         T_LPTICK(2) + T_USEC(50);
 }
 
@@ -208,6 +239,11 @@ cmac_sleep_recalculate(void)
 }
 
 extern bool ble_rf_try_recalibrate(uint32_t idle_time_us);
+
+// Debug - store last wakeup time params
+volatile uint32_t g_last_wakeup_at;
+volatile uint32_t g_last_cmac_timer_read32;
+volatile int32_t g_last_wakeup_diff;
 
 void
 cmac_sleep(void)
@@ -228,12 +264,18 @@ cmac_sleep(void)
 
     wakeup_at = cmac_timer_next_at();
 
+    //debug
+    g_last_wakeup_at = wakeup_at;
+
     /*
      * At this point in time we know exactly when next LLT interrupt should
      * happen so need to make sure we can be up and running on time.
      */
 
-    sleep_usecs = wakeup_at - cmac_timer_read32() - g_mcu_wakeup_usecs_min;
+    g_last_cmac_timer_read32 = cmac_timer_read32();
+    
+    sleep_usecs = wakeup_at - g_last_cmac_timer_read32 - g_mcu_wakeup_usecs_min;
+    
     if ((int32_t)sleep_usecs <= 0) {
         switch_to_slp = false;
         deep_sleep = false;
@@ -285,6 +327,10 @@ do_sleep:
 
     if (deep_sleep) {
         cmac_sleep_enable_dcdc();
+        
+        // debug
+        g_last_wait4xtal_cycles = 0;
+
         cmac_sleep_wait4xtal();
     }
 
@@ -303,6 +349,10 @@ do_sleep:
          * anyway when leaving idle.
          */
         wakeup_diff = (int32_t)(wakeup_at - cmac_timer_read32());
+        
+        // debug
+        g_last_wakeup_diff = wakeup_diff;
+
         if (wakeup_diff <= 0) {
             cmac_timer_trigger_hal();
         }

@@ -312,12 +312,19 @@ cmac_timer_slp_enable(uint32_t ticks)
     switch_to_slp();
 }
 
+volatile uint32_t g_slp_disable_count;
+volatile uint32_t g_cm_ll_int_stat_reg;
+
 void
 cmac_timer_slp_disable(uint32_t exp_ticks)
 {
     uint32_t slept_ticks;
     uint32_t slept_us;
     uint64_t slept_ns;
+
+    g_slp_disable_count++;
+
+    g_cm_ll_int_stat_reg = CMAC->CM_LL_INT_STAT_REG;
 
     assert(CMAC->CM_LL_INT_STAT_REG == 0);
 
@@ -340,6 +347,9 @@ cmac_timer_slp_disable(uint32_t exp_ticks)
 
     CMAC_TIMER_SLP->CM_SLP_TIMER_REG = 0;
     CMAC_TIMER_SLP->CM_SLP_CTRL2_REG = CMAC_TIMER_SLP_CM_SLP_CTRL2_REG_SLP_TIMER_IRQ_CLR_Msk;
+
+
+    g_cm_ll_int_stat_reg = CMAC->CM_LL_INT_STAT_REG;
 
     assert(CMAC->CM_LL_INT_STAT_REG == 0);
 }
@@ -406,6 +416,11 @@ cmac_timer_int_os_tick_clear(void)
     CMAC->CM_LL_INT_STAT_REG = CMAC_CM_LL_INT_STAT_REG_LL_TIMER1_9_0_EQ_Y_SEL_Msk;
 }
 
+volatile uint32_t g_last_val32;
+volatile uint32_t g_last_next_at_mask;
+volatile uint32_t g_last_to_next_eq_x;
+volatile uint32_t g_last_to_next_eq_y;
+
 uint32_t
 cmac_timer_next_at(void)
 {
@@ -416,6 +431,8 @@ cmac_timer_next_at(void)
 
     mask = CMAC->CM_LL_INT_MSK_SET_REG;
 
+    g_last_next_at_mask = mask;
+
 #if MYNEWT_VAL(MCU_SLP_TIMER_32K_ONLY)
     /* Max sleep time is 130s (see below) */
     to_next = 130000000;
@@ -425,10 +442,17 @@ cmac_timer_next_at(void)
 
     val32 = cmac_timer_read32();
 
+    // debug
+    g_last_val32 = val32;
+
     if (mask & CMAC_CM_LL_INT_MSK_SET_REG_LL_TIMER1_EQ_X_SEL_Msk) {
         reg32 = (CMAC->CM_LL_TIMER1_EQ_X_HI_REG << 10) |
                 CMAC->CM_LL_TIMER1_EQ_X_LO_REG;
+
         to_next = min(to_next, reg32 - val32);
+        g_last_to_next_eq_x = to_next;
+    } else {
+        g_last_to_next_eq_x = 0;
     }
 
     if (mask & (CMAC_CM_LL_INT_MSK_SET_REG_LL_TIMER1_36_10_EQ_Y_SEL_Msk |
@@ -436,6 +460,9 @@ cmac_timer_next_at(void)
         reg32 = (CMAC->CM_LL_TIMER1_36_10_EQ_Y_REG << 10) |
                 CMAC->CM_LL_TIMER1_9_0_EQ_Y_REG;
         to_next = min(to_next, reg32 - val32);
+        g_last_to_next_eq_y = to_next;
+    } else {
+        g_last_to_next_eq_y = 0;
     }
 
     /* XXX add handling if any other comparator is used */
