@@ -52,7 +52,7 @@ struct fcb_entry {
 struct fcb {
     /* Caller of fcb_init fills this in */
     uint32_t f_magic;		/* As placed on the disk */
-    uint8_t f_version;  	/* Current version number of the data */
+    uint16_t f_version;  	/* Current version number of the data */
     uint16_t f_sector_cnt;	/* Number of elements in sector array */
     uint16_t f_scratch_cnt;	/* How many sectors should be kept empty */
     struct flash_area *f_sectors; /* Array of sectors, must be contiguous */
