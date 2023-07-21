@@ -25,6 +25,8 @@
 
 extern void ble_rf_calibrate_req(void);
 
+extern int g_time_to_crash;
+
 void
 SYS2CMAC_IRQHandler(void)
 {
@@ -45,6 +47,7 @@ SYS2CMAC_IRQHandler(void)
 
         if (pending_ops & CMAC_PENDING_OP_RF_CAL) {
             ble_rf_calibrate_req();
+            g_time_to_crash = 10000;
         }
 
         CMAC->CM_EXC_STAT_REG = CMAC_CM_EXC_STAT_REG_EXC_SYS2CMAC_Msk;

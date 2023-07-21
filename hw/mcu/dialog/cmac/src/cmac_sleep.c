@@ -157,15 +157,19 @@ cmac_sleep_enable_dcdc(void)
     *(volatile uint32_t *)0x50000304 = g_cmac_shared_data.dcdc.ctrl1;
 }
 
+volatile uint32_t g_xtal_turned_on;
+
 static void
 cmac_sleep_wait4xtal(void)
 {
     if (*(volatile uint32_t *)0x50000014 & 0x4000) {
+        g_xtal_turned_on = 0;
         return;
     }
 
     while (*(volatile uint32_t *)0x5001001c & 0x0000ff00);
     *(volatile uint32_t *)0x5000001c = 1;
+    g_xtal_turned_on = 1;
 }
 
 #define T_USEC(_t)          (_t)
@@ -214,6 +218,8 @@ cmac_sleep_recalculate(void)
 }
 
 extern bool ble_rf_try_recalibrate(uint32_t idle_time_us);
+
+volatile bool g_deep_sleep;
 
 void
 cmac_sleep(void)
@@ -293,6 +299,8 @@ do_sleep:
         cmac_sleep_enable_dcdc();
         cmac_sleep_wait4xtal();
     }
+    // debug
+    g_deep_sleep = deep_sleep;
 
     if (switch_to_slp) {
         cmac_timer_slp_disable(sleep_lp_ticks);

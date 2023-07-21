@@ -124,6 +124,8 @@ slp_switch_to_pclk(void)
     CMAC_TIMER_SLP->CM_SLP_CTRL_REG = reg;
 }
 
+
+
 static int32_t
 slp_read(void)
 {
@@ -251,6 +253,12 @@ compensate_ll_timer(uint32_t slept_us)
     new_ll_timer_09 %= 1024;
     __WFE();
 
+    // debug: try something
+    CMAC->CM_LL_TIMER1_9_0_REG = CMAC->CM_LL_TIMER1_EQ_X_LO_REG;
+    CMAC->CM_LL_TIMER1_36_10_REG = CMAC->CM_LL_TIMER1_EQ_X_HI_REG;
+    CMAC->CM_LL_TIMER1_9_0_REG = CMAC->CM_LL_TIMER1_EQ_X_LO_REG;
+    CMAC->CM_LL_TIMER1_36_10_REG = CMAC->CM_LL_TIMER1_EQ_X_HI_REG;
+
     /* 3rd tick - write compensated value */
     CMAC->CM_LL_TIMER1_9_0_REG = new_ll_timer_09;
     CMAC->CM_LL_TIMER1_36_10_REG = new_ll_timer_36;
@@ -302,6 +310,24 @@ cmac_timer_slp_enable(uint32_t ticks)
     switch_to_slp();
 }
 
+volatile uint32_t g_ll_timer_hi[5];
+volatile uint32_t g_ll_timer_lo[5];
+
+volatile uint32_t g_eq_x;
+volatile uint32_t g_eq_y;
+
+volatile uint32_t g_slp_ctrl_reg[4];
+volatile uint32_t g_slp_timer_reg[4];
+
+volatile uint32_t g_cm_ll_int_stat_reg[7];
+
+int g_time_to_crash = 0;
+
+volatile uint64_t g_slept_ns;
+
+extern volatile bool g_deep_sleep;
+extern volatile uint32_t g_xtal_turned_on;
+
 void
 cmac_timer_slp_disable(uint32_t exp_ticks)
 {
@@ -309,9 +335,32 @@ cmac_timer_slp_disable(uint32_t exp_ticks)
     uint32_t slept_us;
     uint64_t slept_ns;
 
-    assert(CMAC->CM_LL_INT_STAT_REG == 0);
+    g_cm_ll_int_stat_reg[0] = CMAC->CM_LL_INT_STAT_REG;
+    assert(g_cm_ll_int_stat_reg[0] == 0);
+
+    // debug: trying it here
+    __disable_irq();
+
+    g_ll_timer_hi[0] = CMAC->CM_LL_TIMER1_36_10_REG;
+    g_ll_timer_lo[0] = CMAC->CM_LL_TIMER1_9_0_REG;
+
+    // crashed with unhandled interrupt on 2nd line below (SLP_TIMER_REG can't be read yet)
+    //g_slp_ctrl_reg[0] = CMAC_TIMER_SLP->CM_SLP_CTRL_REG;
+    //g_slp_timer_reg[0] = CMAC_TIMER_SLP->CM_SLP_TIMER_REG;
+
+    g_cm_ll_int_stat_reg[1] = CMAC->CM_LL_INT_STAT_REG;
 
     switch_to_llt();
+
+    // verified g_slp_ctrl_reg[1] is 0x100 here: SLP timer running off APB clock instead of LP clock
+    //g_slp_ctrl_reg[1] = CMAC_TIMER_SLP->CM_SLP_CTRL_REG;
+    //g_slp_timer_reg[1] = CMAC_TIMER_SLP->CM_SLP_TIMER_REG;
+
+    g_cm_ll_int_stat_reg[2] = CMAC->CM_LL_INT_STAT_REG;
+    
+    // verified LL timer is running again here, after switch_to_llt(), whereas it was not incrementing before
+    g_ll_timer_hi[1] = CMAC->CM_LL_TIMER1_36_10_REG;
+    g_ll_timer_lo[1] = CMAC->CM_LL_TIMER1_9_0_REG;
 
     slept_ticks = exp_ticks - slp_read();
 
@@ -323,15 +372,58 @@ cmac_timer_slp_disable(uint32_t exp_ticks)
 #endif
     slept_us = slept_ns / 1000;
 
-    __disable_irq();
+    g_slept_ns = slept_ns;
+
+    // capture LL timer a final time, calc delta for how much it
+    // incremented since first capture. 
+    // two things to investigate:
+    // - does xtal settling time affect this delta?
+    // - does the delta change due to an interrupt happening here?
+    //   might need to disable interrupts for whole func
+    g_ll_timer_hi[2] = CMAC->CM_LL_TIMER1_36_10_REG;
+    g_ll_timer_lo[2] = CMAC->CM_LL_TIMER1_9_0_REG;
+
+    g_cm_ll_int_stat_reg[3] = CMAC->CM_LL_INT_STAT_REG;
+
+    //__disable_irq();
+
+    g_eq_x = (CMAC->CM_LL_TIMER1_EQ_X_HI_REG << 10) |
+              CMAC->CM_LL_TIMER1_EQ_X_LO_REG; 
+    g_eq_y = (CMAC->CM_LL_TIMER1_EQ_Y_HI_REG << 10) |
+              CMAC->CM_LL_TIMER1_EQ_Y_LO_REG; 
+
     compensate_1mhz_clock(slept_ns);
     compensate_ll_timer(slept_us);
-    __enable_irq();
+
+    g_ll_timer_hi[3] = CMAC->CM_LL_TIMER1_36_10_REG;
+    g_ll_timer_lo[3] = CMAC->CM_LL_TIMER1_9_0_REG;
+
+    g_cm_ll_int_stat_reg[4] = CMAC->CM_LL_INT_STAT_REG;
+    
+    g_slp_ctrl_reg[2] = CMAC_TIMER_SLP->CM_SLP_CTRL_REG;
+    g_slp_timer_reg[2] = CMAC_TIMER_SLP->CM_SLP_TIMER_REG;
+
+    //__enable_irq();
+
+    
+    g_cm_ll_int_stat_reg[5] = CMAC->CM_LL_INT_STAT_REG;
 
     CMAC_TIMER_SLP->CM_SLP_TIMER_REG = 0;
     CMAC_TIMER_SLP->CM_SLP_CTRL2_REG = CMAC_TIMER_SLP_CM_SLP_CTRL2_REG_SLP_TIMER_IRQ_CLR_Msk;
 
-    assert(CMAC->CM_LL_INT_STAT_REG == 0);
+    g_cm_ll_int_stat_reg[6] = CMAC->CM_LL_INT_STAT_REG;
+
+    assert(g_cm_ll_int_stat_reg[6] == 0);
+
+    // debug: trying it here
+    __enable_irq();
+
+    // debug
+    g_time_to_crash++;
+    if (g_deep_sleep && g_xtal_turned_on) {
+        assert(g_time_to_crash < 10002);
+    }
+
 }
 
 bool
