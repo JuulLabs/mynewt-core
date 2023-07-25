@@ -302,6 +302,37 @@ cmac_timer_slp_enable(uint32_t ticks)
     switch_to_slp();
 }
 
+/* XXX: timerx debug crash */
+struct timerx_debug_info
+{
+    int flag;
+    volatile uint32_t eq_x_hi;
+    volatile uint32_t eq_x_lo;
+    volatile uint32_t t1_36_10;
+    volatile uint32_t t1_9_0;
+};
+struct timerx_debug_info g_timerx_debug;
+
+void
+timerx_debug_crash(int flag)
+{
+    uint32_t ll_hi;
+    uint32_t ll_lo;
+
+    g_timerx_debug.flag = flag;
+    g_timerx_debug.eq_x_hi = CMAC->CM_LL_TIMER1_EQ_X_HI_REG;
+    g_timerx_debug.eq_x_lo = CMAC->CM_LL_TIMER1_EQ_X_LO_REG;
+
+    do {
+        ll_hi = CMAC->CM_LL_TIMER1_36_10_REG;
+        ll_lo = CMAC->CM_LL_TIMER1_9_0_REG;
+    } while (ll_hi != CMAC->CM_LL_TIMER1_36_10_REG);
+
+    g_timerx_debug.t1_36_10 = ll_hi;
+    g_timerx_debug.t1_9_0 = ll_lo;
+}
+/* XXX */
+
 void
 cmac_timer_slp_disable(uint32_t exp_ticks)
 {
@@ -315,6 +346,13 @@ cmac_timer_slp_disable(uint32_t exp_ticks)
 
     slept_ticks = exp_ticks - slp_read();
 
+    /* XXX: timerx debug */
+    __disable_irq();
+    if (CMAC->CM_LL_INT_STAT_REG) {
+        timerx_debug_crash(1);
+    }
+    __enable_irq();
+
     /* XXX optimize this since Cortex-M0+ does not do integer divisions */
 #if MYNEWT_VAL(MCU_SLP_TIMER_32K_ONLY)
     slept_ns = (uint64_t)slept_ticks * 30518;
@@ -324,8 +362,17 @@ cmac_timer_slp_disable(uint32_t exp_ticks)
     slept_us = slept_ns / 1000;
 
     __disable_irq();
+    /* XXX: timerx debug */
+    if (CMAC->CM_LL_INT_STAT_REG) {
+        timerx_debug_crash(2);
+    }
+
     compensate_1mhz_clock(slept_ns);
     compensate_ll_timer(slept_us);
+    /* XXX: timerx debug */
+    if (CMAC->CM_LL_INT_STAT_REG) {
+        timerx_debug_crash(3);
+    }
     __enable_irq();
 
     CMAC_TIMER_SLP->CM_SLP_TIMER_REG = 0;
