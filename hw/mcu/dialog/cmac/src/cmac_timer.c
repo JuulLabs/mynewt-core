@@ -310,6 +310,14 @@ struct timerx_debug_info
     volatile uint32_t eq_x_lo;
     volatile uint32_t t1_36_10;
     volatile uint32_t t1_9_0;
+    uint32_t exp_ticks;
+    uint32_t slept_ticks;
+    uint32_t slept_us;
+    uint32_t usecs;
+    uint32_t lpticks;
+    uint32_t conv;
+    uint32_t freq_before_sleep;
+    uint32_t freq_after_sleep;
 };
 struct timerx_debug_info g_timerx_debug;
 
@@ -344,14 +352,8 @@ cmac_timer_slp_disable(uint32_t exp_ticks)
 
     switch_to_llt();
 
-    slept_ticks = exp_ticks - slp_read();
-
-    /* XXX: timerx debug */
     __disable_irq();
-    if (CMAC->CM_LL_INT_STAT_REG) {
-        timerx_debug_crash(1);
-    }
-    __enable_irq();
+    slept_ticks = exp_ticks - slp_read();
 
     /* XXX optimize this since Cortex-M0+ does not do integer divisions */
 #if MYNEWT_VAL(MCU_SLP_TIMER_32K_ONLY)
@@ -361,7 +363,12 @@ cmac_timer_slp_disable(uint32_t exp_ticks)
 #endif
     slept_us = slept_ns / 1000;
 
-    __disable_irq();
+    /* XXX: timerx debug. Store sleep time information */
+    g_timerx_debug.slept_us = slept_us;
+    g_timerx_debug.slept_ticks = slept_ticks;
+    g_timerx_debug.exp_ticks = exp_ticks;
+    g_timerx_debug.freq_after_sleep = g_cmac_timer_slp.freq;
+
     /* XXX: timerx debug */
     if (CMAC->CM_LL_INT_STAT_REG) {
         timerx_debug_crash(2);
@@ -369,6 +376,7 @@ cmac_timer_slp_disable(uint32_t exp_ticks)
 
     compensate_1mhz_clock(slept_ns);
     compensate_ll_timer(slept_us);
+
     /* XXX: timerx debug */
     if (CMAC->CM_LL_INT_STAT_REG) {
         timerx_debug_crash(3);
@@ -502,6 +510,15 @@ cmac_timer_usecs_to_lp_ticks(uint32_t usecs)
         return (usecs * 33) >> 10;
     }
 #else
-    return (usecs * g_cmac_timer_slp.conv) >> 15;
+    //return (usecs * g_cmac_timer_slp.conv) >> 15;
+    uint32_t lpticks;
+    __disable_irq();
+    lpticks = (usecs * g_cmac_timer_slp.conv) >> 15;
+    g_timerx_debug.usecs = usecs;
+    g_timerx_debug.lpticks = lpticks;
+    g_timerx_debug.conv = g_cmac_timer_slp.conv;
+    g_timerx_debug.freq_before_sleep = g_cmac_timer_slp.freq;
+    __enable_irq();
+    return lpticks;
 #endif
 }
