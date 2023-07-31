@@ -318,6 +318,12 @@ struct timerx_debug_info
     uint32_t conv;
     uint32_t freq_before_sleep;
     uint32_t freq_after_sleep;
+    uint32_t pmu_ctrl_before;
+    uint32_t pmu_sleep_before;
+    uint32_t pmu_xtalready_before;
+    uint32_t pmu_ctrl_after;
+    uint32_t pmu_sleep_after;
+    uint32_t pmu_xtalready_after;
 };
 struct timerx_debug_info g_timerx_debug;
 
@@ -350,6 +356,10 @@ cmac_timer_slp_disable(uint32_t exp_ticks)
 
     assert(CMAC->CM_LL_INT_STAT_REG == 0);
 
+    g_timerx_debug.pmu_ctrl_after =  *(volatile uint32_t *)0x50000020;
+    g_timerx_debug.pmu_sleep_after =  *(volatile uint32_t *)0x500000F4;
+    g_timerx_debug.pmu_xtalready_after =  *(volatile uint32_t *)0x50010018;
+
     switch_to_llt();
 
     __disable_irq();
@@ -368,11 +378,6 @@ cmac_timer_slp_disable(uint32_t exp_ticks)
     g_timerx_debug.slept_ticks = slept_ticks;
     g_timerx_debug.exp_ticks = exp_ticks;
     g_timerx_debug.freq_after_sleep = g_cmac_timer_slp.freq;
-
-    /* XXX: timerx debug */
-    if (CMAC->CM_LL_INT_STAT_REG) {
-        timerx_debug_crash(2);
-    }
 
     compensate_1mhz_clock(slept_ns);
     compensate_ll_timer(slept_us);
@@ -518,6 +523,9 @@ cmac_timer_usecs_to_lp_ticks(uint32_t usecs)
     g_timerx_debug.lpticks = lpticks;
     g_timerx_debug.conv = g_cmac_timer_slp.conv;
     g_timerx_debug.freq_before_sleep = g_cmac_timer_slp.freq;
+    g_timerx_debug.pmu_ctrl_before =  *(volatile uint32_t *)0x50000020;
+    g_timerx_debug.pmu_sleep_before =  *(volatile uint32_t *)0x500000F4;
+    g_timerx_debug.pmu_xtalready_before =  *(volatile uint32_t *)0x50010018;
     __enable_irq();
     return lpticks;
 #endif
