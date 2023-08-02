@@ -202,7 +202,7 @@ cmac_sleep_calculate_wakeup_time(void)
          * Add an extra 1000us of settle time due to occasional crashes due to
          * unknown additional wakeup delay. 
          */
-        T_USEC(500);
+        T_USEC(1000);
 }
 
 void
