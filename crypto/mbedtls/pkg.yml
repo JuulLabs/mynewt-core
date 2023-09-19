@@ -35,6 +35,7 @@ pkg.include_dirs:
     - "include"
     - "@mbedtls/include"
     - "@mbedtls/library"
+    - "include/mbedtls"
 
 pkg.src_dirs:
     - "@mbedtls/library"

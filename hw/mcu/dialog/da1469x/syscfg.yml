@@ -463,6 +463,7 @@ syscfg.defs:
     DA1469X_LPCLK_SYSINIT_STAGE:
         description: >
           'Initalization stage for DA1469X'
+        value: 1
 
     WATCHDOG_DISABLE_ON_INIT:
         description: >

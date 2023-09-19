@@ -196,7 +196,7 @@ cmac_sleep_calculate_wakeup_time(void)
          * worst case. Finally, LLP compensation takes around 50us.
          */
         T_LPTICK_U(2) + T_LPTICK_U(2) +
-        max(T_LPTICK_U(3), T_USEC(g_cmac_shared_data.xtal32m_settle_us)) +
+        max(T_LPTICK_U(3), T_USEC(g_cmac_shm_ctrl.xtal32m_settle_us)) +
         T_LPTICK(2) + T_USEC(50) +
 
         /*
