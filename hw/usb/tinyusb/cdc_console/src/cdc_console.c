@@ -34,7 +34,7 @@ cdc_schedule_tx_flush(void)
     os_eventq_put(os_eventq_dflt_get(), &tx_flush_event);
 }
 
-static void
+static int
 cdc_write(int c)
 {
     uint32_t written;
@@ -44,17 +44,28 @@ cdc_write(int c)
         tud_cdc_write_flush();
         if (written == 0) {
             tud_cdc_write_char(c);
+            return -1;
         }
     }
+    return 0;
 }
 
 int
 console_out_nolock(int c)
 {
+    int ret = 0;
+
     if ('\n' == c) {
-        cdc_write('\r');
+        ret = cdc_write('\r');
+        if (ret == -1) {
+            return -1;
+        }
     }
-    cdc_write(c);
+
+    ret = cdc_write(c);
+    if (ret == -1) {
+        return -1;
+    }
 
     cdc_schedule_tx_flush();
 
