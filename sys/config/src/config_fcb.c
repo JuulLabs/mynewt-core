@@ -185,6 +185,7 @@ conf_fcb_compress_internal(struct fcb *fcb,
         if (loc1.fe_area != fcb->f_oldest) {
             break;
         }
+        hal_watchdog_tickle();
         rc = conf_fcb_var_read(&loc1, buf1, &name1, &val1);
         if (rc) {
             continue;
