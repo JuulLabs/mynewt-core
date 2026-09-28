@@ -74,7 +74,11 @@ SystemInit(void)
 #endif
 
     /* Initialize power domains (disable) */
-    CRG_TOP->PMU_CTRL_REG |= PMU_ALL_SLEEP_MASK;
+
+    // 
+    // XL/SD4 flash_loader: this disables PD_COM causing debugger to disconnect
+    //
+    //CRG_TOP->PMU_CTRL_REG |= PMU_ALL_SLEEP_MASK;
 
     /*
      * Reset all PDC entries. Make sure PD_SYS cannot be powered down before
